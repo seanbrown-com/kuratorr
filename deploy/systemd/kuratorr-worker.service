@@ -1,0 +1,19 @@
+[Unit]
+Description=Kuratorr Celery worker
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+User=kuratorr
+Group=kuratorr
+WorkingDirectory=/opt/kuratorr
+EnvironmentFile=/opt/kuratorr/.env
+ExecStart=/opt/kuratorr/.venv/bin/celery -A config worker --loglevel=INFO --concurrency=2
+Restart=on-failure
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -4,12 +4,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Music Library Curator{% endblock %}</title>
+  <title>{% block title %}Kuratorr{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
 </head>
 <body>
   <header>
-    <a class="brand" href="{% url 'dashboard' %}">Music Library Curator</a>
+    <a class="brand" href="{% url 'dashboard' %}">Kuratorr</a>
     {% if user.is_authenticated %}
     <nav>
       <a href="{% url 'track-list' %}">Tracks</a>

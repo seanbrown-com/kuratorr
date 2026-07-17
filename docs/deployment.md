@@ -12,31 +12,31 @@
 
 Run `scripts/install-lxc.sh REPO_URL DOMAIN [LETSENCRYPT_EMAIL]` as root. Without an email, the installer configures HTTP and leaves certificate provisioning to the administrator. For an internet-facing service, provide the email and verify automatic HTTPS before creating the administrator.
 
-The application lives at `/opt/music-library-curator`; infrastructure secrets live in its mode-0600 `.env`; systemd runs all application processes as `musiclibrary`. Provider credentials may be entered in the Settings UI and are encrypted in PostgreSQL using a key derived from `DJANGO_SECRET_KEY`. Back up the database and `.env` together; neither is sufficient to recover those credentials alone. Never commit `.env`.
+The application lives at `/opt/kuratorr`; infrastructure secrets live in its mode-0600 `.env`; systemd runs all application processes as `kuratorr`. Provider credentials may be entered in the Settings UI and are encrypted in PostgreSQL using a key derived from `DJANGO_SECRET_KEY`. Back up the database and `.env` together; neither is sufficient to recover those credentials alone. Never commit `.env`.
 
 ## Mount permissions
 
-The `musiclibrary` account needs traverse/read access to every library parent and file. It needs create/write/rename access to playlist output directories. If the source mount is under `/home`, the systemd `ProtectHome=true` policy blocks it; use `/mnt`, `/media`, or another system mount point, or deliberately adjust the unit after understanding the exposure.
+The `kuratorr` account needs traverse/read access to every library parent and file. It needs create/write/rename access to playlist output directories. If the source mount is under `/home`, the systemd `ProtectHome=true` policy blocks it; use `/mnt`, `/media`, or another system mount point, or deliberately adjust the unit after understanding the exposure.
 
 After editing units or `.env`:
 
 ```bash
 systemctl daemon-reload
-systemctl restart music-library-web music-library-worker music-library-beat
+systemctl restart kuratorr-web kuratorr-worker kuratorr-beat
 ```
 
 ## Observe
 
 ```bash
-systemctl status music-library-web music-library-worker music-library-beat
-journalctl -u music-library-worker -f
+systemctl status kuratorr-web kuratorr-worker kuratorr-beat
+journalctl -u kuratorr-worker -f
 nginx -t
 curl -fsS https://YOUR_DOMAIN/health/
 ```
 
 ## Update and recover
 
-Run `scripts/update-from-git.sh` as root. Backups are written under `/var/backups/music-library-curator` before code or schema changes. Retention is intentionally left to the host's backup policy.
+Run `scripts/update-from-git.sh` as root. Backups are written under `/var/backups/kuratorr` before code or schema changes. Retention is intentionally left to the host's backup policy.
 
 To restore a backup, stop application services, create/empty the target database according to your recovery policy, then use `pg_restore`. Test restoration on a non-production database before relying on it.
 

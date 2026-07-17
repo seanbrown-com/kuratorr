@@ -24,7 +24,7 @@ class BaseClient:
         self.session = requests.Session()
         service_settings = ServiceSettings.load()
         user_agent = service_settings.http_user_agent or os.getenv(
-            "HTTP_USER_AGENT", "MusicLibraryCurator/1.0 (admin@example.invalid)"
+            "HTTP_USER_AGENT", "Kuratorr/1.0 (admin@example.invalid)"
         )
         self.session.headers.update({"User-Agent": user_agent})
 

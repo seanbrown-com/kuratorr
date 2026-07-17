@@ -1,0 +1,19 @@
+[Unit]
+Description=Kuratorr web service
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+User=kuratorr
+Group=kuratorr
+WorkingDirectory=/opt/kuratorr
+EnvironmentFile=/opt/kuratorr/.env
+ExecStart=/opt/kuratorr/.venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120
+Restart=on-failure
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

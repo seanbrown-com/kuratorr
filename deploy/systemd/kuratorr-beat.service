@@ -1,0 +1,19 @@
+[Unit]
+Description=Kuratorr scheduled jobs
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+User=kuratorr
+Group=kuratorr
+WorkingDirectory=/opt/kuratorr
+EnvironmentFile=/opt/kuratorr/.env
+ExecStart=/opt/kuratorr/.venv/bin/celery -A config beat --loglevel=INFO --schedule=/opt/kuratorr/celerybeat-schedule
+Restart=on-failure
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

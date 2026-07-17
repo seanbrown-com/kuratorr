@@ -1,6 +1,6 @@
-# Music Library Curator
+# Kuratorr
 
-Music Library Curator is a private, single-administrator Django service that scans mounted MP3 and FLAC libraries, preserves their tags, enriches artists and albums from independent external sources, identifies noteworthy local tracks, and builds browsable and exportable M3U playlists. The original hand-written prototypes are preserved in [`legacy/`](legacy/).
+Kuratorr is a private, single-administrator Django service that scans mounted MP3 and FLAC libraries, preserves their tags, enriches artists and albums from independent external sources, identifies noteworthy local tracks, and builds browsable and exportable M3U playlists. The original hand-written prototypes are preserved in [`legacy/`](legacy/).
 
 ## What it does
 
@@ -18,7 +18,7 @@ Music Library Curator is a private, single-administrator Django service that sca
 - Requires aggregate and radio playlists to meet the configurable minimum duration (one hour by default).
 - Stores playlists and ordered entries in PostgreSQL, with optional atomic M3U materialization to server directories.
 - Supports soft deletion, permanent regeneration suppression, a deleted-playlist review screen, and restoration.
-- Downloads an M3U or a Bash script that copies the playlist's source files into a same-named directory.
+- Downloads portable M3U files using a user-supplied external music path, a ZIP containing all active playlists, or a two-argument Bash script that copies a playlist into a same-named destination directory.
 - Records every manually or automatically started job and its outcome.
 
 ## Quick local start (Docker)
@@ -131,12 +131,12 @@ The installer expects a fresh Debian 13 container with working DNS, a domain poi
 ./scripts/install-lxc.sh GIT_REPOSITORY_URL music.example.com admin@example.com
 ```
 
-It installs PostgreSQL, Redis, Nginx, Python, Gunicorn, Celery, systemd services, and optional Let's Encrypt; generates database, Django, and one-time setup secrets; runs migrations/static collection; and prints the setup token. Add API credentials on the Settings page (or use environment fallbacks), make mounted paths readable by `musiclibrary`, make output paths writable, and restart the three application services after environment changes.
+It installs PostgreSQL, Redis, Nginx, Python, Gunicorn, Celery, systemd services, and optional Let's Encrypt; generates database, Django, and one-time setup secrets; runs migrations/static collection; and prints the setup token. Add API credentials on the Settings page (or use environment fallbacks), make mounted paths readable by `kuratorr`, make output paths writable, and restart the three application services after environment changes.
 
 Update an installed service as root:
 
 ```bash
-/opt/music-library-curator/scripts/update-from-git.sh
+/opt/kuratorr/scripts/update-from-git.sh
 ```
 
 The updater creates a timestamped PostgreSQL backup, requires a fast-forward Git pull, installs dependency changes, migrates, collects static files, restarts services, and displays their status.
@@ -146,7 +146,7 @@ See [architecture](docs/architecture.md), [data-source behavior](docs/data-sourc
 ## Important operational notes
 
 - Only files accessible inside the service/container can be scanned or copied.
-- The downloaded copy script must run on a machine where the stored absolute source paths exist.
+- Downloaded copy scripts take `SOURCE_DIR` and `DESTINATION_DIR`; downloaded M3Us use the external source directory entered at download time.
 - A normal deletion and a permanently suppressed deletion both remain restorable. Permanent means generation skips that exact definition until restoration.
 - External matching is intentionally conservative. Rejected evidence is preserved as provenance but never contributes to playlists.
 - No artist or album imagery is downloaded or displayed.

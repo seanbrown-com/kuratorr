@@ -188,7 +188,7 @@ def test_settings_page_encrypts_api_credentials(client, django_user_model):
             "spotify_market": "US",
             "youtube_max_results": 25,
             "youtube_auto_accept_confidence": "0.900",
-            "http_user_agent": "MusicLibraryCurator/1.0 (admin@example.com)",
+            "http_user_agent": "Kuratorr/1.0 (admin@example.com)",
             "spotify_client_id": "spotify-id",
             "spotify_client_secret": "spotify-secret",
             "lastfm_api_key": "lastfm-key",

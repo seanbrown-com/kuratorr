@@ -5,8 +5,8 @@ if [[ $EUID -ne 0 ]]; then echo "Run as root inside a Debian 13 LXC." >&2; exit 
 REPO_URL=${1:?Usage: install-lxc.sh REPO_URL DOMAIN [LETSENCRYPT_EMAIL]}
 DOMAIN=${2:?Usage: install-lxc.sh REPO_URL DOMAIN [LETSENCRYPT_EMAIL]}
 EMAIL=${3:-}
-APP_DIR=/opt/music-library-curator
-APP_USER=musiclibrary
+APP_DIR=/opt/kuratorr
+APP_USER=kuratorr
 
 apt-get update
 apt-get install -y git python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx certbot python3-certbot-nginx openssl
@@ -17,13 +17,13 @@ git clone "$REPO_URL" "$APP_DIR"
 DB_PASSWORD=$(openssl rand -hex 24)
 DJANGO_SECRET=$(openssl rand -hex 48)
 SETUP_TOKEN=$(openssl rand -hex 24)
-if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='music_library'" | grep -q 1; then
-  runuser -u postgres -- psql -c "CREATE USER music_library WITH PASSWORD '$DB_PASSWORD';"
+if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='kuratorr'" | grep -q 1; then
+  runuser -u postgres -- psql -c "CREATE USER kuratorr WITH PASSWORD '$DB_PASSWORD';"
 else
-  runuser -u postgres -- psql -c "ALTER USER music_library WITH PASSWORD '$DB_PASSWORD';"
+  runuser -u postgres -- psql -c "ALTER USER kuratorr WITH PASSWORD '$DB_PASSWORD';"
 fi
-if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='music_library'" | grep -q 1; then
-  runuser -u postgres -- createdb -O music_library music_library
+if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='kuratorr'" | grep -q 1; then
+  runuser -u postgres -- createdb -O kuratorr kuratorr
 fi
 
 python3 -m venv "$APP_DIR/.venv"
@@ -39,9 +39,9 @@ DJANGO_SSL_REDIRECT=true
 DJANGO_HSTS_SECONDS=31536000
 TIME_ZONE=UTC
 INITIAL_SETUP_TOKEN=$SETUP_TOKEN
-DATABASE_URL=postgresql://music_library:$DB_PASSWORD@localhost:5432/music_library
+DATABASE_URL=postgresql://kuratorr:$DB_PASSWORD@localhost:5432/kuratorr
 CELERY_BROKER_URL=redis://localhost:6379/0
-HTTP_USER_AGENT=MusicLibraryCurator/1.0 ($DOMAIN)
+HTTP_USER_AGENT=Kuratorr/1.0 ($DOMAIN)
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 LASTFM_API_KEY=
@@ -52,17 +52,17 @@ chmod 600 "$APP_DIR/.env"
 runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" migrate --noinput
 runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" collectstatic --noinput
 
-install -m 0644 "$APP_DIR/deploy/systemd/music-library-web.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/music-library-worker.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/music-library-beat.service" /etc/systemd/system/
-sed "s/__DOMAIN__/$DOMAIN/g" "$APP_DIR/deploy/nginx/music-library.conf" > /etc/nginx/sites-available/music-library
-ln -sf /etc/nginx/sites-available/music-library /etc/nginx/sites-enabled/music-library
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-web.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-beat.service" /etc/systemd/system/
+sed "s/__DOMAIN__/$DOMAIN/g" "$APP_DIR/deploy/nginx/kuratorr.conf" > /etc/nginx/sites-available/kuratorr
+ln -sf /etc/nginx/sites-available/kuratorr /etc/nginx/sites-enabled/kuratorr
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl daemon-reload
-systemctl enable --now postgresql redis-server music-library-web music-library-worker music-library-beat nginx
+systemctl enable --now postgresql redis-server kuratorr-web kuratorr-worker kuratorr-beat nginx
 systemctl reload nginx
 if [[ -n "$EMAIL" ]]; then certbot --nginx --non-interactive --agree-tos -m "$EMAIL" -d "$DOMAIN" --redirect; fi
 echo "Installation complete: https://$DOMAIN"
 echo "ONE-TIME INITIAL SETUP TOKEN: $SETUP_TOKEN"
-echo "Add API credentials to $APP_DIR/.env, then restart the three music-library services."
+echo "Add API credentials to $APP_DIR/.env, then restart the three Kuratorr services."
