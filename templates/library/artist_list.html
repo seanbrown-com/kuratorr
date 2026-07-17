@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block content %}<h1>Artists</h1><div class="card-list">{% for artist in artists %}<a class="card" href="{% url 'artist-detail' artist.pk %}"><strong>{{ artist.name }}</strong><span>{{ artist.albums.count }} albums · {{ artist.tracks.count }} tracks</span></a>{% empty %}<p>No artists imported.</p>{% endfor %}</div>{% endblock %}
+

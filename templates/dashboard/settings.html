@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Service settings</h1>
+<section class="card narrow">
+  <h2>Enrichment and API configuration</h2>
+  <p>Credentials entered here are encrypted before database storage. Password fields are never filled back into the page; leave one blank to retain its existing value.</p>
+  <p>
+    <span class="tag">Spotify: {{ form.instance.spotify_configured|yesno:"Configured,Not configured" }}</span>
+    <span class="tag">Last.fm: {{ form.instance.lastfm_configured|yesno:"Configured,Not configured" }}</span>
+    <span class="tag">YouTube: {{ form.instance.youtube_configured|yesno:"Configured,Not configured" }}</span>
+  </p>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button>Save settings</button></form>
+</section>
+<section class="card narrow">
+  <h2>MusicBrainz</h2>
+  <p>MusicBrainz read queries do not need an account or API key. Set the HTTP user agent above to a meaningful value such as <code>MusicLibraryCurator/1.0 (you@example.com)</code>; MusicBrainz requires application identification and contact information.</p>
+</section>
+{% endblock %}

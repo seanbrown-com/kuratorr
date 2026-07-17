@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ artist.name }}</h1>
+<section class="card"><h2>Refresh sources</h2><div class="actions">
+  <form method="post" action="{% url 'run-artist-source' artist.pk 'musicbrainz' %}">{% csrf_token %}<button>MusicBrainz</button></form>
+  <form method="post" action="{% url 'run-artist-source' artist.pk 'spotify' %}">{% csrf_token %}<button>Spotify</button></form>
+  <form method="post" action="{% url 'run-artist-source' artist.pk 'lastfm' %}">{% csrf_token %}<button>Last.fm</button></form>
+  <form method="post" action="{% url 'run-artist-source' artist.pk 'wikipedia' %}">{% csrf_token %}<button>Wikipedia</button></form>
+  <form method="post" action="{% url 'run-artist-source' artist.pk 'youtube' %}">{% csrf_token %}<button>YouTube</button></form>
+</div></section>
+<section class="card"><h2>Greatest hits</h2><table><thead><tr><th>Title</th><th>Album</th><th>Year</th></tr></thead><tbody>{% for track in greatest_hits %}<tr><td>{{ track.title }}</td><td>{{ track.album.title }}</td><td>{{ track.year|default:track.album.year|default:"—" }}</td></tr>{% empty %}<tr><td colspan="3">No accepted noteworthy tracks yet.</td></tr>{% endfor %}</tbody></table></section>
+<section class="card"><h2>Albums</h2>{% for album in artist.albums.all %}<h3>{{ album.title }} <small>{{ album.year|default:"Unknown year" }}</small></h3><p>{% for item in album.genre_assignments.all %}<span class="tag">{{ item.genre.name }}</span>{% empty %}No album genres yet{% endfor %}</p>{% empty %}<p>No albums.</p>{% endfor %}</section>
+<section class="card"><h2>Tracks</h2><table><thead><tr><th>Title</th><th>Album</th><th>Year</th></tr></thead><tbody>{% for track in artist.tracks.all %}<tr><td>{{ track.title }}</td><td>{{ track.album.title }}</td><td>{{ track.year|default:track.album.year|default:"—" }}</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Initial setup{% endblock %}
+{% block content %}
+<section class="narrow card">
+  <h1>Secure initial setup</h1>
+  <p>Create the service's only administrator. The one-time setup token was printed by the installer and stored in the server environment.</p>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create administrator</button></form>
+</section>
+{% endblock %}
+

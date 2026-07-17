@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Library roots</h1>
+<section class="card directory-browser">
+  <div class="heading">
+    <div><h2>Add a directory</h2><small>Browsing folders visible inside the Linux service.</small></div>
+    <code>{{ browser.current }}</code>
+  </div>
+  {% if browser.error %}<p class="warning">{{ browser.error }}</p>{% endif %}
+  <nav class="directory-list" aria-label="Server directories">
+    {% if browser.parent %}<a class="directory parent" href="{% url 'root-list' %}?browse={{ browser.parent|urlencode }}"><span aria-hidden="true">↰</span> Parent directory</a>{% endif %}
+    {% for directory in browser.directories %}
+      <a class="directory" href="{% url 'root-list' %}?browse={{ directory.path|urlencode }}"><span aria-hidden="true">▸</span> {{ directory.name }}</a>
+    {% empty %}
+      <p class="empty-directory">No accessible subdirectories.</p>
+    {% endfor %}
+  </nav>
+  <form method="post" class="directory-choice">
+    {% csrf_token %}
+    {{ form.path }}
+    {% if form.path.errors %}<div class="warning">{{ form.path.errors }}</div>{% endif %}
+    <label>{{ form.enabled }} Include this root in scans</label>
+    <button>Add <code>{{ browser.current }}</code></button>
+  </form>
+</section>
+<section class="card"><table><thead><tr><th>Path</th><th>Enabled</th><th>Last scanned</th><th></th></tr></thead><tbody>
+{% for root in roots %}<tr><td><code>{{ root.path }}</code></td><td>{{ root.enabled|yesno:"Yes,No" }}</td><td>{{ root.last_scanned_at|default:"Never" }}</td><td><form method="post" action="{% url 'scan-root' root.pk %}">{% csrf_token %}<button>Scan now</button></form></td></tr>
+{% empty %}<tr><td colspan="4">No library roots configured.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

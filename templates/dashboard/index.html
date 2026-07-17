@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Library dashboard</h1>
+<div class="stats">
+  <div><strong>{{ artist_count }}</strong><span>Artists</span></div>
+  <div><strong>{{ album_count }}</strong><span>Albums</span></div>
+  <div><strong>{{ track_count }}</strong><span>Tracks</span></div>
+  <div><strong>{{ playlist_count }}</strong><span>Playlists</span></div>
+  <div><strong>{{ pending_reviews }}</strong><span>Pending reviews</span></div>
+</div>
+<div class="grid two">
+  <section class="card">
+    <h2>Pipeline</h2>
+    <p><a href="{% url 'root-list' %}">Configure and scan library roots</a></p>
+    <form method="post" action="{% url 'run-job' 'enrich_library' %}">{% csrf_token %}<button>Run all enrichment</button></form>
+    <form method="post" action="{% url 'run-job' 'refresh_recommendations' %}">{% csrf_token %}<button>Rank recommended artists</button></form>
+    <p><a href="{% url 'artist-recommendations' %}">Browse {{ recommendation_count }} artist recommendation{{ recommendation_count|pluralize }}</a></p>
+    <form method="post" action="{% url 'run-job' 'generate_playlists' %}">{% csrf_token %}<button>Generate playlists</button></form>
+    <form method="post" action="{% url 'run-job' 'materialize_playlists' %}">{% csrf_token %}<button>Write playlists to disk</button></form>
+    <p><a href="{% url 'playlist-output-roots' %}">Configure playlist output directories</a></p>
+  </section>
+  <section class="card">
+    <h2>Recent jobs</h2>
+    <table><thead><tr><th>Job</th><th>Status</th><th>Progress</th><th>Started</th></tr></thead><tbody>
+    {% for job in jobs %}<tr><td>{{ job.job_type }}</td><td><span class="status {{ job.status }}">{{ job.get_status_display }}</span>{% if job.error %}<details><summary>Error</summary>{{ job.error }}</details>{% endif %}</td><td>{{ job.progress_current }}/{{ job.progress_total }}</td><td>{{ job.created_at }}</td></tr>
+    {% empty %}<tr><td colspan="4">No jobs yet.</td></tr>{% endfor %}
+    </tbody></table>
+  </section>
+</div>
+{% endblock %}

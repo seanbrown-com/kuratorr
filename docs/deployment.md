@@ -1,0 +1,54 @@
+# Debian 13 deployment runbook
+
+## Before installation
+
+1. Create an unprivileged Debian 13 LXC with adequate CPU, memory, and database storage.
+2. Mount the music library read-only where possible; mount a separate writable playlist destination if desired.
+3. Point a DNS record at the public address and forward TCP 80/443.
+4. Configure the LXC firewall and Proxmox firewall. SSH should be key-only and restricted separately.
+5. Obtain Spotify, Last.fm, and YouTube API credentials.
+
+## Install
+
+Run `scripts/install-lxc.sh REPO_URL DOMAIN [LETSENCRYPT_EMAIL]` as root. Without an email, the installer configures HTTP and leaves certificate provisioning to the administrator. For an internet-facing service, provide the email and verify automatic HTTPS before creating the administrator.
+
+The application lives at `/opt/music-library-curator`; infrastructure secrets live in its mode-0600 `.env`; systemd runs all application processes as `musiclibrary`. Provider credentials may be entered in the Settings UI and are encrypted in PostgreSQL using a key derived from `DJANGO_SECRET_KEY`. Back up the database and `.env` together; neither is sufficient to recover those credentials alone. Never commit `.env`.
+
+## Mount permissions
+
+The `musiclibrary` account needs traverse/read access to every library parent and file. It needs create/write/rename access to playlist output directories. If the source mount is under `/home`, the systemd `ProtectHome=true` policy blocks it; use `/mnt`, `/media`, or another system mount point, or deliberately adjust the unit after understanding the exposure.
+
+After editing units or `.env`:
+
+```bash
+systemctl daemon-reload
+systemctl restart music-library-web music-library-worker music-library-beat
+```
+
+## Observe
+
+```bash
+systemctl status music-library-web music-library-worker music-library-beat
+journalctl -u music-library-worker -f
+nginx -t
+curl -fsS https://YOUR_DOMAIN/health/
+```
+
+## Update and recover
+
+Run `scripts/update-from-git.sh` as root. Backups are written under `/var/backups/music-library-curator` before code or schema changes. Retention is intentionally left to the host's backup policy.
+
+To restore a backup, stop application services, create/empty the target database according to your recovery policy, then use `pg_restore`. Test restoration on a non-production database before relying on it.
+
+## Security checklist
+
+- HTTPS works and HTTP redirects to HTTPS.
+- `DJANGO_DEBUG=false`, secure cookies enabled, HSTS enabled only after HTTPS works.
+- HSTS preload is intentionally not enabled automatically; opt in only after understanding the long-lived, subdomain-wide preload commitment.
+- Only the expected domain is in allowed hosts and CSRF trusted origins.
+- The setup token is long, secret, and used only once; rotate/remove it from `.env` after the administrator is created.
+- Provider keys are encrypted in PostgreSQL or supplied through `.env`; database and Django secrets remain in `.env` with mode 0600.
+- Library mount is read-only unless another process requires writes.
+- PostgreSQL and Redis listen only on localhost/container-private networks.
+- OS security updates, Proxmox backups, PostgreSQL backups, and log rotation are configured.
+- Job errors and pending review counts are monitored from the dashboard.

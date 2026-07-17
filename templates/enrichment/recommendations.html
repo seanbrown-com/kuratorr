@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Recommended artists · Music Library Curator{% endblock %}
+{% block content %}
+<div class="heading">
+  <div>
+    <h1>Recommended artists</h1>
+    <p>Artists not currently in your library, ranked by how many library artists link to them.</p>
+  </div>
+  {% if last_job %}<small>Last ranking: {{ last_job.finished_at|default:last_job.created_at }} · <span class="status {{ last_job.status }}">{{ last_job.get_status_display }}</span></small>{% endif %}
+</div>
+<section class="card">
+  <table>
+    <thead><tr><th>Rank</th><th>Recommended artist</th><th>Linked artists</th><th>Evidence</th><th>Sources</th><th>Connected to</th></tr></thead>
+    <tbody>
+      {% for recommendation in page %}
+      <tr>
+        <td><strong>#{{ recommendation.rank }}</strong></td>
+        <td><strong>{{ recommendation.name }}</strong></td>
+        <td>{{ recommendation.linked_artist_count }}</td>
+        <td>{{ recommendation.evidence_count }}</td>
+        <td>{% for source in recommendation.sources %}<span class="tag">{{ source }}</span>{% endfor %}</td>
+        <td>{{ recommendation.linked_artists|join:", " }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6">No ranking has been generated yet. Run “Rank recommended artists” from the dashboard after enrichment discovers related artists.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
+{% endblock %}

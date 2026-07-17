@@ -1,0 +1,20 @@
+[Unit]
+Description=Music Library Curator web service
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+User=musiclibrary
+Group=musiclibrary
+WorkingDirectory=/opt/music-library-curator
+EnvironmentFile=/opt/music-library-curator/.env
+ExecStart=/opt/music-library-curator/.venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120
+Restart=on-failure
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+

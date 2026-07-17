@@ -1,0 +1,341 @@
+from decimal import Decimal
+
+import pytest
+import requests
+
+from enrichment.clients import BaseClient, ProviderNotConfigured
+from enrichment.models import (
+    ArtistRecommendation,
+    Decision,
+    ExternalTrack,
+    NoteworthyEvidence,
+    RelatedArtistEvidence,
+    Source,
+    SourceRecord,
+)
+from enrichment.services import (
+    _album_infobox_singles,
+    _best_album_candidate,
+    _match_local_track,
+    _section_candidates,
+    _wikipedia_infobox,
+    _youtube_confidence,
+    _youtube_title,
+    enrich_spotify,
+    enrich_wikipedia,
+    refresh_artist_recommendations,
+    refresh_noteworthy_decisions,
+)
+from library.models import Album, Artist, Track
+from library.services import normalize_text
+from playlists.services import noteworthy_tracks
+
+
+@pytest.mark.django_db
+def test_fuzzy_match_accepts_version_suffix(track, artist):
+    matched, confidence, decision = _match_local_track(
+        artist, "Change (In the House of Flies) - Radio Edit"
+    )
+    assert matched == track
+    assert confidence >= Decimal("0.9")
+    assert decision == Decision.ACCEPTED
+
+
+def test_wikipedia_parser_reads_single_and_video_sections():
+    html = """
+    <h2>Singles</h2><table><tr><th>Year</th><th>Title</th></tr>
+    <tr><td>2000</td><td>\"Change\"</td></tr></table>
+    <h2>Music videos</h2><ul><li>2001 – \"Back to School\"</li></ul>
+    """
+    values = _section_candidates(html)
+    assert ("wikipedia_single", "Change", 2000) in values
+    assert ("wikipedia_video", "Back to School", 2001) in values
+
+
+def test_wikipedia_parser_keeps_non_album_singles_in_rowspan_tables():
+    html = """
+    <h2>Discography</h2><h3>Singles</h3>
+    <table class="wikitable">
+      <tr><th>Year</th><th>Title</th><th>Album</th></tr>
+      <tr><td rowspan="2">2025</td><td>"Album Single"</td><td>Studio Album</td></tr>
+      <tr><td>"Standalone Single"</td><td>Non-album single</td></tr>
+    </table>
+    """
+    values = _section_candidates(html)
+    assert ("wikipedia_single", "Album Single", 2025) in values
+    assert ("wikipedia_single", "Standalone Single", 2025) in values
+    assert all(title != "Non-album single" for _, title, _ in values)
+
+
+def test_youtube_rejects_lyrics_and_extracts_title():
+    item = {
+        "snippet": {
+            "title": "Deftones - Change (Official Lyric Video)",
+            "description": "",
+            "channelTitle": "Deftones",
+        }
+    }
+    assert _youtube_confidence(item, type("Artist", (), {"name": "Deftones"})()) == 0
+    assert _youtube_title("Deftones - Change (Official Music Video)", "Deftones") == "Change"
+
+
+def test_wikipedia_infobox_preserves_album_genres_and_associated_acts():
+    html = """
+    <table class="infobox vevent"><tr><th>Genre</th><td><a>Alternative metal</a><br><a>Art rock</a></td></tr>
+    <tr><th>Associated acts</th><td><a>Team Sleep</a><a>Crosses</a></td></tr></table>
+    """
+    info = _wikipedia_infobox(html)
+    assert info["genre"] == ["Alternative metal", "Art rock"]
+    assert info["associated acts"] == ["Team Sleep", "Crosses"]
+
+
+def test_album_infobox_extracts_only_formal_singles():
+    html = """
+    <table class="infobox"><tr><th>Singles from <i>Team Sleep</i></th></tr>
+    <tr><td><ol><li>"Ever (Foreign Flag)"<br><span>Released: April 25, 2005</span></li></ol></td></tr>
+    <tr><th>Track listing</th></tr><tr><td><ol><li>Blvd. Nights</li></ol></td></tr></table>
+    """
+    assert _album_infobox_singles(html) == ["Ever (Foreign Flag)"]
+
+
+@pytest.mark.django_db
+def test_album_match_rejects_similarly_named_wrong_artist(artist):
+    album = Album.objects.create(
+        artist=artist, title="Deftones", normalized_title="deftones", year=2003
+    )
+    candidates = [
+        {"title": "Armor for Sleep", "snippet": "American rock band"},
+        {"title": "Deftones (album)", "snippet": "album by Deftones"},
+    ]
+    confidence, candidate = _best_album_candidate(artist, album, candidates)
+    assert candidate["title"] == "Deftones (album)"
+    assert confidence == Decimal("1")
+
+
+@pytest.mark.django_db
+def test_wikipedia_uses_exact_artist_page_when_search_omits_it(artist, monkeypatch):
+    class FakeWikipedia:
+        def page_html(self, title):
+            return {
+                "pageid": 42,
+                "title": artist.name,
+                "text": '<table class="infobox"><tr><th>Origin</th><td>Sacramento</td></tr></table>',
+            }
+
+        def find_page(self, title):
+            raise AssertionError("Exact artist page should avoid unreliable search results")
+
+    monkeypatch.setattr("enrichment.services.WikipediaClient", FakeWikipedia)
+    assert enrich_wikipedia(artist)["tracks"] == 0
+
+
+def test_youtube_requires_explicit_official_music_video_and_artist_channel():
+    artist = type("Artist", (), {"name": "Team Sleep"})()
+    plain_upload = {
+        "snippet": {"title": "Team Sleep - Blvd. Nights", "description": "", "channelTitle": "Team Sleep"}
+    }
+    official = {
+        "snippet": {"title": "Team Sleep - Blvd. Nights (Official Music Video)", "description": "", "channelTitle": "Team Sleep"}
+    }
+    assert _youtube_confidence(plain_upload, artist) == 0
+    assert _youtube_confidence(official, artist) == Decimal("0.95")
+
+
+@pytest.mark.django_db
+def test_noteworthy_union_uses_top_two_per_popularity_source_and_wikipedia_single(
+    artist, album, root
+):
+    titles = ["No One Loves Me", "New Fang", "Dead End Friends", "Scumbag Blues", "Mind Eraser"]
+    tracks = {}
+    for index, title in enumerate(titles, 1):
+        tracks[title] = Track.objects.create(
+            library_root=root,
+            artist=artist,
+            album=album,
+            full_path=f"{root.path}/{index}.mp3",
+            relative_path=f"{index}.mp3",
+            file_format="mp3",
+            title=title,
+            normalized_title=normalize_text(title),
+            duration_seconds=Decimal("240"),
+            file_size=100,
+            file_modified_ns=index,
+        )
+
+    def evidence(source, evidence_type, title, rank=None, playcount=None):
+        record = SourceRecord.objects.create(
+            source=source,
+            entity_kind="track",
+            external_id=f"{source}:{title}",
+            fetched_at=__import__("django.utils.timezone", fromlist=["now"]).now(),
+            payload={"title": title},
+        )
+        external = ExternalTrack.objects.create(
+            source_record=record,
+            artist=artist,
+            matched_track=tracks[title],
+            artist_name=artist.name,
+            title=title,
+            rank=rank,
+            playcount=playcount,
+            match_confidence=Decimal("1"),
+            match_decision=Decision.ACCEPTED,
+        )
+        NoteworthyEvidence.objects.create(
+            artist=artist,
+            track=tracks[title],
+            external_track=external,
+            evidence_type=evidence_type,
+            confidence=Decimal("1"),
+            decision=Decision.ACCEPTED,
+        )
+
+    for rank, title in enumerate(["No One Loves Me", "New Fang", "Dead End Friends", "Scumbag Blues"], 1):
+        evidence(Source.SPOTIFY, NoteworthyEvidence.EvidenceType.SPOTIFY_TOP, title, rank=rank)
+    for rank, title in enumerate(["New Fang", "Dead End Friends", "Scumbag Blues", "No One Loves Me"], 1):
+        evidence(Source.LASTFM, NoteworthyEvidence.EvidenceType.LASTFM_TOP, title, rank=rank, playcount=10000)
+    evidence(Source.WIKIPEDIA, NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE, "Mind Eraser")
+
+    refresh_noteworthy_decisions(artist)
+    assert {track.title for track in noteworthy_tracks(artist)} == {
+        "No One Loves Me",
+        "New Fang",
+        "Dead End Friends",
+        "Mind Eraser",
+    }
+
+
+@pytest.mark.django_db
+def test_spotify_ranking_is_stored_as_independent_source_evidence(track, artist, monkeypatch):
+    class FakeSpotify:
+        def find_artist(self, name):
+            return [
+                {
+                    "id": "artist-1",
+                    "name": name,
+                    "external_urls": {"spotify": "https://spotify/artist-1"},
+                }
+            ]
+
+        def top_tracks(self, artist_id, market):
+            return [
+                {
+                    "id": "track-1",
+                    "name": track.title,
+                    "duration_ms": 240000,
+                    "popularity": 77,
+                    "artists": [{"name": artist.name}],
+                    "album": {"name": track.album.title},
+                    "external_urls": {"spotify": "https://spotify/track-1"},
+                }
+            ]
+
+    monkeypatch.setattr("enrichment.services.SpotifyClient", FakeSpotify)
+    assert enrich_spotify(artist) == {"tracks": 1}
+    record = SourceRecord.objects.get(source=Source.SPOTIFY, entity_kind="track")
+    evidence = NoteworthyEvidence.objects.get(external_track__source_record=record)
+    assert evidence.decision == Decision.ACCEPTED
+    assert evidence.external_track.rank == 1
+    assert evidence.external_track.popularity == 77
+    assert evidence.external_track.playcount is None
+
+
+@pytest.mark.django_db
+def test_uncertain_spotify_artist_match_cannot_auto_accept_track(track, artist, monkeypatch):
+    class FakeSpotify:
+        def find_artist(self, name):
+            return [{"id": "artist-2", "name": "Deft Ones Band", "external_urls": {}}]
+
+        def top_tracks(self, artist_id, market):
+            return [
+                {
+                    "id": "track-2",
+                    "name": track.title,
+                    "duration_ms": 240000,
+                    "artists": [{"name": "Deft Ones Band"}],
+                    "album": {"name": track.album.title},
+                    "external_urls": {},
+                }
+            ]
+
+    monkeypatch.setattr("enrichment.services.SpotifyClient", FakeSpotify)
+    enrich_spotify(artist)
+    evidence = NoteworthyEvidence.objects.get(external_track__source_record__external_id="track-2")
+    assert evidence.decision == Decision.PENDING
+
+
+@pytest.mark.django_db
+def test_recommendations_rank_absent_artists_by_distinct_library_links(artist):
+    mastodon = Artist.objects.create(name="Mastodon", normalized_name="mastodon")
+    team_sleep = Artist.objects.create(name="Team Sleep", normalized_name="team sleep")
+    relationships = [
+        (artist, "Failure", Source.LASTFM),
+        (artist, "Failure", Source.WIKIPEDIA),
+        (mastodon, "Failure", Source.MUSICBRAINZ),
+        (artist, "Hum", Source.LASTFM),
+        (artist, "Team Sleep", Source.WIKIPEDIA),
+    ]
+    for index, (source_artist, related_name, source) in enumerate(relationships):
+        RelatedArtistEvidence.objects.create(
+            artist=source_artist,
+            related_artist_name=related_name,
+            relationship_type=RelatedArtistEvidence.RelationshipType.SIMILAR
+            if source == Source.LASTFM
+            else RelatedArtistEvidence.RelationshipType.COLLABORATOR,
+            source=source,
+            confidence=Decimal("0.8"),
+            decision=Decision.PENDING,
+        )
+
+    assert refresh_artist_recommendations() == {
+        "recommendations": 2,
+        "top_artist": "Failure",
+    }
+    failure, hum = ArtistRecommendation.objects.all()
+    assert (failure.name, failure.linked_artist_count, failure.evidence_count) == (
+        "Failure",
+        2,
+        3,
+    )
+    assert failure.linked_artists == ["Deftones", "Mastodon"]
+    assert (hum.name, hum.rank) == ("Hum", 2)
+    local_relationship = RelatedArtistEvidence.objects.get(related_artist_name="Team Sleep")
+    assert local_relationship.related_artist == team_sleep
+
+
+@pytest.mark.django_db
+def test_api_client_retries_transient_tls_failures(monkeypatch):
+    client = BaseClient()
+
+    class SuccessResponse:
+        ok = True
+
+        def json(self):
+            return {"ok": True}
+
+    responses = iter([requests.exceptions.SSLError("temporary EOF"), SuccessResponse()])
+
+    def request(*args, **kwargs):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(client.session, "request", request)
+    monkeypatch.setattr("enrichment.clients.time.sleep", lambda seconds: None)
+
+    assert client.json("GET", "https://example.test") == {"ok": True}
+
+
+@pytest.mark.django_db
+def test_missing_provider_configuration_is_a_skip_not_a_job_error(artist, monkeypatch):
+    from enrichment.tasks import ENRICHERS, enrich_artist
+
+    def missing_provider(current_artist):
+        raise ProviderNotConfigured("API key is not configured in Settings")
+
+    monkeypatch.setitem(ENRICHERS, "lastfm", missing_provider)
+    result = enrich_artist(artist, "lastfm")
+
+    assert result == {"lastfm": {"skipped": "API key is not configured in Settings"}}
+    assert artist.source_statuses.get(source="lastfm").last_error == ""

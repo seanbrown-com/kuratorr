@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="heading"><div><h1>{{ playlist.name }}</h1><p>{{ playlist.get_playlist_type_display }} · {{ playlist.track_count }} tracks · {{ playlist.duration_seconds }} seconds</p></div>
+{% if not playlist.is_deleted %}<div class="actions"><a class="button secondary" href="{% url 'download-copy-script' playlist.pk %}">Download copy script</a></div>{% endif %}</div>
+{% if playlist.is_deleted %}<div class="message warning">This playlist is deleted{% if playlist.never_regenerate %} and permanently suppressed from regeneration{% endif %}.</div>{% endif %}
+{% if not playlist.is_deleted %}
+<section class="card narrow">
+  <h2>Download M3U</h2>
+  <p>Enter the music directory as it exists on the computer or player where this M3U will be used.</p>
+  <form method="post" action="{% url 'download-m3u' playlist.pk %}">
+    {% csrf_token %}
+    {{ export_form.as_p }}
+    <button>Download M3U</button>
+  </form>
+</section>
+{% endif %}
+<table><thead><tr><th>#</th><th>Artist</th><th>Title</th><th>Album</th><th>Year</th><th>Duration</th></tr></thead><tbody>
+{% for entry in playlist.entries.all %}<tr><td>{{ entry.position }}</td><td>{{ entry.track.artist.name }}</td><td>{{ entry.track.title }}</td><td>{{ entry.track.album.title }}</td><td>{{ entry.track.year|default:entry.track.album.year|default:"—" }}</td><td>{{ entry.track.duration_seconds|floatformat:0 }}s</td></tr>{% endfor %}</tbody></table>
+{% if not playlist.is_deleted %}<section class="card danger-zone"><h2>Delete playlist</h2><form method="post" action="{% url 'delete-playlist' playlist.pk %}">{% csrf_token %}<label><input type="checkbox" name="permanent"> Permanently suppress this exact playlist definition from regeneration</label><button class="danger">Delete</button></form></section>{% endif %}
+{% endblock %}

@@ -1,0 +1,20 @@
+[Unit]
+Description=Music Library Curator scheduled jobs
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+User=musiclibrary
+Group=musiclibrary
+WorkingDirectory=/opt/music-library-curator
+EnvironmentFile=/opt/music-library-curator/.env
+ExecStart=/opt/music-library-curator/.venv/bin/celery -A config beat --loglevel=INFO --schedule=/opt/music-library-curator/celerybeat-schedule
+Restart=on-failure
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+

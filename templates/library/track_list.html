@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Tracks</h1>
+<form class="search" method="get"><input name="q" value="{{ query }}" placeholder="Search title, artist, or album"><button>Search</button></form>
+<table><thead><tr><th>Artist</th><th>Title</th><th>Album</th><th>Year</th><th>Format</th><th>Duration</th></tr></thead><tbody>
+{% for track in page %}<tr><td><a href="{% url 'artist-detail' track.artist.pk %}">{{ track.artist.name }}</a></td><td>{{ track.title }}</td><td>{{ track.album.title }}</td><td>{{ track.year|default:track.album.year|default:"—" }}</td><td>{{ track.file_format|upper }}</td><td>{{ track.duration_seconds|floatformat:0 }}s</td></tr>
+{% empty %}<tr><td colspan="6">No tracks found.</td></tr>{% endfor %}</tbody></table>
+<div class="pagination">{% if page.has_previous %}<a href="?q={{ query }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?q={{ query }}&page={{ page.next_page_number }}">Next</a>{% endif %}</div>
+{% endblock %}
+

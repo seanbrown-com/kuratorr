@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest>=8.4,<9
+pytest-django>=4.11,<5
+pytest-cov>=6.2,<7
+responses>=0.25,<1
+ruff>=0.12,<1
+

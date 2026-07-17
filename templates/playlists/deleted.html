@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Deleted playlists</h1><p>Restoring a permanently suppressed playlist also makes it eligible for generation again.</p>
+<table><thead><tr><th>Name</th><th>Type</th><th>Deleted</th><th>Suppressed</th><th></th></tr></thead><tbody>
+{% for playlist in playlists %}<tr><td><a href="{% url 'playlist-detail' playlist.pk %}">{{ playlist.name }}</a></td><td>{{ playlist.get_playlist_type_display }}</td><td>{{ playlist.deleted_at }}</td><td>{{ playlist.never_regenerate|yesno:"Yes,No" }}</td><td><form method="post" action="{% url 'restore-playlist' playlist.pk %}">{% csrf_token %}<button>Restore</button></form></td></tr>
+{% empty %}<tr><td colspan="5">No deleted playlists.</td></tr>{% endfor %}</tbody></table>
+{% endblock %}
+

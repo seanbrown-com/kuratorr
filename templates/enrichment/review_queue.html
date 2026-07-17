@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Match review</h1>
+<div class="tabs">{% for value,label in decisions %}<a class="{% if selected == value %}active{% endif %}" href="?decision={{ value }}">{{ label }}</a>{% endfor %}</div>
+<table><thead><tr><th>Source</th><th>Artist</th><th>External title</th><th>Local match</th><th>Confidence</th><th>Evidence</th><th>Decision</th></tr></thead><tbody>
+{% for item in page %}<tr>
+  <td>{{ item.external_track.source_record.get_source_display }}</td>
+  <td>{{ item.artist.name }}</td>
+  <td>{{ item.external_track.title }}</td>
+  <td>{% if item.track %}{{ item.track.artist.name }} — {{ item.track.title }}<br><small>{{ item.track.album.title }} · {{ item.track.year|default:item.track.album.year|default:"—" }}</small>{% else %}<span class="warning">No local match</span>{% endif %}</td>
+  <td>{{ item.confidence }}</td><td>{{ item.get_evidence_type_display }}</td>
+  <td><div class="actions">
+    <form method="post" action="{% url 'review-evidence' item.pk 'accepted' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button>Accept</button></form>
+    <form method="post" action="{% url 'review-evidence' item.pk 'rejected' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button class="danger">Reject</button></form>
+  </div></td>
+</tr>{% empty %}<tr><td colspan="7">Nothing in this queue.</td></tr>{% endfor %}</tbody></table>
+{% endblock %}
+
