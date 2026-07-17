@@ -30,6 +30,18 @@ class ServiceSettings(TimestampedModel):
     youtube_auto_accept_confidence = models.DecimalField(
         max_digits=4, decimal_places=3, default=0.9
     )
+    track_match_review_threshold = models.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        default=0.850,
+        help_text="Minimum whole-title similarity sent to Review; lower scores are rejected.",
+    )
+    track_match_auto_accept_threshold = models.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        default=0.950,
+        help_text="Minimum whole-title similarity accepted automatically.",
+    )
     spotify_client_id_encrypted = models.TextField(blank=True)
     spotify_client_secret_encrypted = models.TextField(blank=True)
     lastfm_api_key_encrypted = models.TextField(blank=True)

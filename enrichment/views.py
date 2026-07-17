@@ -4,7 +4,13 @@ from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from enrichment.models import ArtistRecommendation, Decision, JobRun, NoteworthyEvidence
+from enrichment.models import (
+    ArtistRecommendation,
+    Decision,
+    JobRun,
+    MissingAlbum,
+    NoteworthyEvidence,
+)
 from enrichment.tasks import ENRICHERS, enrich_artist_task
 from library.models import Artist
 
@@ -17,6 +23,22 @@ def recommendations(request):
         request,
         "enrichment/recommendations.html",
         {"page": page, "last_job": last_job},
+    )
+
+
+@login_required
+def missing_albums(request):
+    albums = MissingAlbum.objects.select_related("artist", "source_record")
+    query = request.GET.get("q", "").strip()
+    if query:
+        albums = albums.filter(artist__name__icontains=query) | albums.filter(
+            title__icontains=query
+        )
+    page = Paginator(albums, 100).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "enrichment/missing_albums.html",
+        {"page": page, "query": query},
     )
 
 

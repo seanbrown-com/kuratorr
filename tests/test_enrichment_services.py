@@ -1,13 +1,16 @@
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 import requests
+from django.utils import timezone
 
-from enrichment.clients import BaseClient, ProviderNotConfigured
+from enrichment.clients import BaseClient, MusicBrainzClient, ProviderNotConfigured
 from enrichment.models import (
     ArtistRecommendation,
     Decision,
     ExternalTrack,
+    MissingAlbum,
     NoteworthyEvidence,
     RelatedArtistEvidence,
     Source,
@@ -22,6 +25,7 @@ from enrichment.services import (
     _youtube_confidence,
     _youtube_title,
     enrich_spotify,
+    enrich_musicbrainz,
     enrich_wikipedia,
     refresh_artist_recommendations,
     refresh_noteworthy_decisions,
@@ -41,6 +45,30 @@ def test_fuzzy_match_accepts_version_suffix(track, artist):
     assert decision == Decision.ACCEPTED
 
 
+@pytest.mark.django_db
+def test_track_match_rejects_unrelated_partial_substring(track, artist):
+    track.title = "Into the Great Wide Open"
+    track.normalized_title = normalize_text(track.title)
+    track.save()
+
+    matched, confidence, decision = _match_local_track(artist, "Room at the Top")
+
+    assert matched is None
+    assert confidence < Decimal("0.85")
+    assert decision == Decision.REJECTED
+
+
+@pytest.mark.django_db
+def test_track_match_sends_only_close_titles_to_review(track, artist):
+    matched, confidence, decision = _match_local_track(
+        artist, "Change in the House of Flys"
+    )
+
+    assert matched == track
+    assert Decimal("0.85") <= confidence < Decimal("0.95")
+    assert decision == Decision.PENDING
+
+
 def test_wikipedia_parser_reads_single_and_video_sections():
     html = """
     <h2>Singles</h2><table><tr><th>Year</th><th>Title</th></tr>
@@ -50,6 +78,21 @@ def test_wikipedia_parser_reads_single_and_video_sections():
     values = _section_candidates(html)
     assert ("wikipedia_single", "Change", 2000) in values
     assert ("wikipedia_video", "Back to School", 2001) in values
+
+
+def test_wikipedia_parser_removes_reference_markup_and_unmatched_quote():
+    html = """
+    <h2>Music videos</h2><table>
+      <tr><th>Year</th><th>Title</th></tr>
+      <tr><td>2005</td><td>Image of the Invisible" <sup class="reference"><a href="./cite_note-33">[ 33 ]</a></sup></td></tr>
+      <tr><td>2008</td><td>"Come All You Weary"<sup class="reference"><a href="./cite_note-36">[36]</a></sup></td></tr>
+    </table>
+    """
+
+    assert _section_candidates(html) == [
+        ("wikipedia_video", "Image of the Invisible", 2005),
+        ("wikipedia_video", "Come All You Weary", 2008),
+    ]
 
 
 def test_wikipedia_parser_keeps_non_album_singles_in_rowspan_tables():
@@ -129,6 +172,49 @@ def test_wikipedia_uses_exact_artist_page_when_search_omits_it(artist, monkeypat
     assert enrich_wikipedia(artist)["tracks"] == 0
 
 
+@pytest.mark.django_db
+def test_musicbrainz_catalog_records_only_missing_albums(artist, album, monkeypatch):
+    class FakeMusicBrainz:
+        def find_artist(self, name):
+            return [{"id": "artist-1", "name": name}]
+
+        def release_groups(self, artist_mbid):
+            return [
+                {
+                    "id": "present",
+                    "title": album.title,
+                    "primary-type": "Album",
+                    "first-release-date": "2000-06-20",
+                },
+                {
+                    "id": "missing",
+                    "title": "Saturday Night Wrist",
+                    "primary-type": "Album",
+                    "first-release-date": "2006-10-31",
+                    "secondary-types": [],
+                },
+                {
+                    "id": "single",
+                    "title": "Minerva",
+                    "primary-type": "Single",
+                    "first-release-date": "2003",
+                },
+            ]
+
+        def relationships(self, artist_mbid):
+            return []
+
+    monkeypatch.setattr("enrichment.services.MusicBrainzClient", FakeMusicBrainz)
+
+    assert enrich_musicbrainz(artist)["albums"] == 1
+    missing = MissingAlbum.objects.get()
+    assert (missing.title, missing.year, missing.release_type) == (
+        "Saturday Night Wrist",
+        2006,
+        "Album",
+    )
+
+
 def test_youtube_requires_explicit_official_music_video_and_artist_channel():
     artist = type("Artist", (), {"name": "Team Sleep"})()
     plain_upload = {
@@ -139,6 +225,27 @@ def test_youtube_requires_explicit_official_music_video_and_artist_channel():
     }
     assert _youtube_confidence(plain_upload, artist) == 0
     assert _youtube_confidence(official, artist) == Decimal("0.95")
+
+
+def test_youtube_accepts_legacy_vevo_music_video_description():
+    artist = type("Artist", (), {"name": "Thrice"})()
+    legacy_vevo = {
+        "snippet": {
+            "title": "Thrice - Image Of The Invisible",
+            "description": "Music video by Thrice performing Image Of The Invisible. (C) 2005 Island",
+            "channelTitle": "ThriceVEVO",
+        }
+    }
+    unrelated_upload = {
+        "snippet": {
+            "title": "Thrice - Image Of The Invisible",
+            "description": "Live video filmed on tour",
+            "channelTitle": "MusicArchive",
+        }
+    }
+
+    assert _youtube_confidence(legacy_vevo, artist) == Decimal("0.95")
+    assert _youtube_confidence(unrelated_upload, artist) == Decimal("0")
 
 
 @pytest.mark.django_db
@@ -203,6 +310,74 @@ def test_noteworthy_union_uses_top_two_per_popularity_source_and_wikipedia_singl
         "Dead End Friends",
         "Mind Eraser",
     }
+
+
+@pytest.mark.django_db
+def test_refresh_accepts_exact_titles_instead_of_retaining_stale_confidence(track, artist):
+    now = __import__("django.utils.timezone", fromlist=["now"]).now()
+    youtube_record = SourceRecord.objects.create(
+        source=Source.YOUTUBE,
+        entity_kind="video",
+        external_id="exact-youtube",
+        fetched_at=now,
+        payload={
+            "snippet": {
+                "title": f"{artist.name} - {track.title} (Official Music Video)",
+                "description": "",
+                "channelTitle": artist.name,
+            }
+        },
+    )
+    wikipedia_record = SourceRecord.objects.create(
+        source=Source.WIKIPEDIA,
+        entity_kind="track_mention",
+        external_id="malformed-wikipedia-title",
+        fetched_at=now,
+        payload={"title": f'{track.title}" [ 33 ]'},
+    )
+    cases = [
+        (
+            youtube_record,
+            track.title,
+            NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL,
+            Decimal("0.450"),
+        ),
+        (
+            wikipedia_record,
+            f'{track.title}" [ 33 ]',
+            NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
+            Decimal("0.936"),
+        ),
+    ]
+    for record, title, evidence_type, stale_confidence in cases:
+        external = ExternalTrack.objects.create(
+            source_record=record,
+            artist=artist,
+            matched_track=track,
+            artist_name=artist.name,
+            title=title,
+            match_confidence=stale_confidence,
+            match_decision=Decision.PENDING,
+        )
+        NoteworthyEvidence.objects.create(
+            artist=artist,
+            track=track,
+            external_track=external,
+            evidence_type=evidence_type,
+            confidence=stale_confidence,
+            decision=Decision.PENDING,
+        )
+
+    assert refresh_noteworthy_decisions(artist) == {
+        "accepted": 2,
+        "rejected": 0,
+        "pending": 0,
+    }
+    for evidence in NoteworthyEvidence.objects.all():
+        assert evidence.decision == Decision.ACCEPTED
+        assert evidence.confidence == Decimal("1")
+        assert evidence.external_track.match_confidence == Decimal("1")
+    assert ExternalTrack.objects.get(source_record=wikipedia_record).title == track.title
 
 
 @pytest.mark.django_db
@@ -328,6 +503,45 @@ def test_api_client_retries_transient_tls_failures(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_musicbrainz_rate_limit_uses_shared_redis_lock(monkeypatch):
+    events = []
+
+    class FakeLock:
+        def acquire(self, blocking=True):
+            events.append(("acquire", blocking))
+            return True
+
+        def release(self):
+            events.append(("release",))
+
+    class FakeRedis:
+        def lock(self, name, timeout, blocking_timeout):
+            events.append(("lock", name, timeout, blocking_timeout))
+            return FakeLock()
+
+        def get(self, name):
+            events.append(("get", name))
+            return "0"
+
+        def set(self, name, value, ex):
+            events.append(("set", name, ex))
+
+    monkeypatch.setattr(MusicBrainzClient, "rate_redis", FakeRedis())
+    monkeypatch.setattr(BaseClient, "json", lambda self, method, url, **kwargs: {"ok": True})
+
+    client = MusicBrainzClient()
+    assert client.json("GET", "https://musicbrainz.test") == {"ok": True}
+    assert events[0] == (
+        "lock",
+        "kuratorr:musicbrainz:request-lock",
+        180,
+        240,
+    )
+    assert ("acquire", True) in events
+    assert events[-1] == ("release",)
+
+
+@pytest.mark.django_db
 def test_missing_provider_configuration_is_a_skip_not_a_job_error(artist, monkeypatch):
     from enrichment.tasks import ENRICHERS, enrich_artist
 
@@ -339,3 +553,33 @@ def test_missing_provider_configuration_is_a_skip_not_a_job_error(artist, monkey
 
     assert result == {"lastfm": {"skipped": "API key is not configured in Settings"}}
     assert artist.source_statuses.get(source="lastfm").last_error == ""
+
+
+@pytest.mark.django_db
+def test_pending_enrichment_retries_stale_musicbrainz_failures(artist, monkeypatch):
+    from enrichment.models import ArtistSourceStatus
+    from enrichment.tasks import enrich_artist_task, run_pending_enrichments
+
+    status = ArtistSourceStatus.objects.create(
+        artist=artist,
+        source=Source.MUSICBRAINZ,
+        last_attempted_at=timezone.now() - timedelta(minutes=20),
+        last_error="temporary TLS failure",
+    )
+    for source in (Source.SPOTIFY, Source.LASTFM, Source.WIKIPEDIA, Source.YOUTUBE):
+        ArtistSourceStatus.objects.create(artist=artist, source=source)
+    queued = []
+    monkeypatch.setattr(
+        enrich_artist_task,
+        "delay",
+        lambda artist_id, source=None, job_id=None: queued.append((artist_id, source)),
+    )
+
+    assert run_pending_enrichments() == 1
+    assert queued == [(artist.pk, Source.MUSICBRAINZ)]
+
+    status.last_attempted_at = timezone.now()
+    status.save(update_fields=["last_attempted_at"])
+    queued.clear()
+    assert run_pending_enrichments() == 0
+    assert queued == []

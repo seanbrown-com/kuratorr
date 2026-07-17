@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Missing albums · Kuratorr{% endblock %}
+{% block content %}
+<div class="heading">
+  <div>
+    <h1>Missing albums</h1>
+    <p>Albums released by artists in your library that were not found in your local collection.</p>
+  </div>
+  <small>Identified from source release catalogs during artist enrichment.</small>
+</div>
+<form class="search" method="get">
+  <input name="q" value="{{ query }}" placeholder="Search artist or album" aria-label="Search missing albums">
+  <button>Search</button>
+</form>
+<section class="card">
+  <table>
+    <thead><tr><th>Artist</th><th>Missing album</th><th>Year</th><th>Release type</th><th>Source</th></tr></thead>
+    <tbody>
+      {% for album in page %}
+      <tr>
+        <td><a href="{% url 'artist-detail' album.artist.pk %}"><strong>{{ album.artist.name }}</strong></a></td>
+        <td><strong>{{ album.title }}</strong></td>
+        <td>{{ album.year|default:"—" }}</td>
+        <td><span class="tag">{{ album.release_type|default:"Album" }}</span></td>
+        <td>{% if album.source_record.canonical_url %}<a href="{{ album.source_record.canonical_url }}" target="_blank" rel="noopener">{{ album.get_source_display }}</a>{% else %}{{ album.get_source_display }}{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5">No missing albums have been identified. Run MusicBrainz enrichment to compare each artist’s album catalog with your library.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?q={{ query|urlencode }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?q={{ query|urlencode }}&page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
+{% endblock %}

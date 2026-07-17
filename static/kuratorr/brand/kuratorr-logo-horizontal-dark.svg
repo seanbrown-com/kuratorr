@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 128" role="img" aria-labelledby="title">
+<title>Kuratorr wordmark</title>
+<rect width="980" height="128" rx="18" fill="#0F1312"/>
+<g transform="translate(28 20) scale(.17)">
+  <g fill="none" stroke="#B8854A" stroke-width="18" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M126 167h260v220H126z"/>
+    <path d="M150 132h212v35H150z"/>
+    <path d="M174 100h164v32H174z"/>
+    <path d="M126 210l52 36h156l52-36"/>
+    <circle class="kuratorr-record" cx="256" cy="197" r="49"/>
+    <circle cx="256" cy="197" r="12" fill="#B8854A" stroke="none"/>
+  </g>
+  <text x="256" y="347" text-anchor="middle" font-family="Marcellus, Georgia, serif" font-size="132" fill="#E9E3D6">K</text>
+</g>
+<line x1="143" y1="26" x2="143" y2="102" stroke="#B8854A" stroke-opacity=".45"/>
+<text x="168" y="82" font-family="Marcellus, Georgia, serif" font-size="55" letter-spacing="9" fill="#E9E3D6">KURATORR</text>
+
+</svg>

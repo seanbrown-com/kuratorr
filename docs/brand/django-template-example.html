@@ -1,0 +1,24 @@
+{% load static %}
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0F1312">
+  <link rel="icon" href="{% static 'kuratorr/brand/favicon.svg' %}" type="image/svg+xml">
+  <link rel="icon" href="{% static 'kuratorr/brand/favicon-32.png' %}" sizes="32x32">
+  <link rel="apple-touch-icon" href="{% static 'kuratorr/brand/apple-touch-icon.png' %}">
+  <link rel="stylesheet" href="{% static 'kuratorr/brand/kuratorr-theme.css' %}">
+</head>
+<body>
+  <header class="app-header">
+    <a class="kuratorr-logo" href="/">
+      <img
+        src="{% static 'kuratorr/brand/kuratorr-logo-horizontal-dark.svg' %}"
+        alt="Kuratorr"
+        width="360"
+        height="47">
+    </a>
+  </header>
+</body>
+</html>

@@ -7,7 +7,15 @@ from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
 
-from enrichment.models import ArtistRecommendation, Decision, NoteworthyEvidence
+from enrichment.models import (
+    ArtistRecommendation,
+    Decision,
+    JobRun,
+    MissingAlbum,
+    NoteworthyEvidence,
+    Source,
+    SourceRecord,
+)
 from library.models import LibraryRoot, ServiceSettings
 from playlists.models import Playlist
 from playlists.services import generate_artist_playlists
@@ -65,6 +73,9 @@ def test_track_list_shows_required_metadata(client, django_user_model, track):
     body = response.content.decode()
     assert response.status_code == 200
     assert all(value in body for value in ("Deftones", "Change", "White Pony", "2000"))
+    assert "kuratorr-logo-horizontal-dark.svg" in body
+    assert "kuratorr/brand/site.webmanifest" in body
+    assert "data-theme-toggle" in body
 
 
 @pytest.mark.django_db
@@ -169,6 +180,69 @@ def test_recommendations_page_shows_rank_and_connections(client, django_user_mod
 
 
 @pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_job_history_lists_and_filters_all_jobs(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    JobRun.objects.create(
+        job_type="enrich_musicbrainz",
+        status=JobRun.Status.FAILED,
+        error="temporary TLS failure",
+        requested_manually=False,
+    )
+    JobRun.objects.create(
+        job_type="generate_playlists",
+        status=JobRun.Status.SUCCEEDED,
+        summary={"playlists": 4},
+        requested_manually=True,
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("job-history"), {"status": "failed"})
+    body = response.content.decode()
+
+    assert response.status_code == 200
+    assert all(value in body for value in ("Jobs", "enrich_musicbrainz", "temporary TLS failure"))
+    assert "<strong>generate_playlists</strong>" not in body
+    assert 'href="/jobs/"' in body
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_missing_albums_page_lists_release_and_navigation(
+    client, django_user_model, artist
+):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    record = SourceRecord.objects.create(
+        source=Source.MUSICBRAINZ,
+        entity_kind="release_group",
+        external_id="missing-album",
+        canonical_url="https://musicbrainz.org/release-group/missing-album",
+        fetched_at=__import__("django.utils.timezone", fromlist=["now"]).now(),
+    )
+    MissingAlbum.objects.create(
+        artist=artist,
+        source=Source.MUSICBRAINZ,
+        source_record=record,
+        external_id="missing-album",
+        title="Saturday Night Wrist",
+        normalized_title="saturday night wrist",
+        year=2006,
+        release_type="Album",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("missing-albums"))
+    body = response.content.decode()
+
+    assert response.status_code == 200
+    assert all(value in body for value in ("Missing", "Deftones", "Saturday Night Wrist", "2006"))
+
+
+@pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES, SECRET_KEY="credential-test-secret")
 def test_settings_page_encrypts_api_credentials(client, django_user_model):
     user = django_user_model.objects.create_superuser(
@@ -188,6 +262,8 @@ def test_settings_page_encrypts_api_credentials(client, django_user_model):
             "spotify_market": "US",
             "youtube_max_results": 25,
             "youtube_auto_accept_confidence": "0.900",
+            "track_match_review_threshold": "0.850",
+            "track_match_auto_accept_threshold": "0.950",
             "http_user_agent": "Kuratorr/1.0 (admin@example.com)",
             "spotify_client_id": "spotify-id",
             "spotify_client_secret": "spotify-secret",

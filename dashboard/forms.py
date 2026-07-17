@@ -56,11 +56,21 @@ class ServiceSettingsForm(forms.ModelForm):
             "spotify_market",
             "youtube_max_results",
             "youtube_auto_accept_confidence",
+            "track_match_review_threshold",
+            "track_match_auto_accept_threshold",
             "http_user_agent",
         ]
 
     def clean(self):
         cleaned = super().clean()
+        review_threshold = cleaned.get("track_match_review_threshold")
+        accept_threshold = cleaned.get("track_match_auto_accept_threshold")
+        if review_threshold is not None and accept_threshold is not None:
+            if review_threshold >= accept_threshold:
+                self.add_error(
+                    "track_match_auto_accept_threshold",
+                    "The automatic threshold must be greater than the Review threshold.",
+                )
         spotify_id = cleaned.get("spotify_client_id")
         spotify_secret = cleaned.get("spotify_client_secret")
         if bool(spotify_id) != bool(spotify_secret):

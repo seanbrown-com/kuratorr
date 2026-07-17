@@ -4,6 +4,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
 from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
@@ -59,6 +60,40 @@ def dashboard(request):
         "jobs": JobRun.objects.all()[:12],
     }
     return render(request, "dashboard/index.html", context)
+
+
+@login_required
+def job_history(request):
+    jobs = JobRun.objects.all()
+    selected_status = request.GET.get("status", "")
+    selected_type = request.GET.get("type", "")
+    selected_requested = request.GET.get("requested", "")
+    if selected_status in JobRun.Status.values:
+        jobs = jobs.filter(status=selected_status)
+    else:
+        selected_status = ""
+    if selected_type:
+        jobs = jobs.filter(job_type=selected_type)
+    if selected_requested == "manual":
+        jobs = jobs.filter(requested_manually=True)
+    elif selected_requested == "automatic":
+        jobs = jobs.filter(requested_manually=False)
+    else:
+        selected_requested = ""
+    job_types = JobRun.objects.order_by("job_type").values_list("job_type", flat=True).distinct()
+    page = Paginator(jobs, 100).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "dashboard/job_history.html",
+        {
+            "page": page,
+            "statuses": JobRun.Status.choices,
+            "job_types": job_types,
+            "selected_status": selected_status,
+            "selected_type": selected_type,
+            "selected_requested": selected_requested,
+        },
+    )
 
 
 @login_required

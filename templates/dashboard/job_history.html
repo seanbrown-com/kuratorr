@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Job history · Kuratorr{% endblock %}
+{% block content %}
+<div class="heading">
+  <div>
+    <h1>Job history</h1>
+    <p>Complete history of manual and automatic library, enrichment, recommendation, and playlist jobs.</p>
+  </div>
+  <small>{{ page.paginator.count }} matching job{{ page.paginator.count|pluralize }}</small>
+</div>
+<form class="filter job-filters" method="get">
+  <label>Status
+    <select name="status">
+      <option value="">All statuses</option>
+      {% for value,label in statuses %}<option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Job type
+    <select name="type">
+      <option value="">All job types</option>
+      {% for job_type in job_types %}<option value="{{ job_type }}" {% if selected_type == job_type %}selected{% endif %}>{{ job_type }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Requested by
+    <select name="requested">
+      <option value="">Manual and automatic</option>
+      <option value="manual" {% if selected_requested == "manual" %}selected{% endif %}>Manual</option>
+      <option value="automatic" {% if selected_requested == "automatic" %}selected{% endif %}>Automatic</option>
+    </select>
+  </label>
+  <button>Filter</button>
+  {% if selected_status or selected_type or selected_requested %}<a class="button secondary" href="{% url 'job-history' %}">Clear</a>{% endif %}
+</form>
+<section class="card">
+  <table>
+    <thead><tr><th>Job</th><th>Status</th><th>Requested</th><th>Progress</th><th>Started</th><th>Finished</th><th>Details</th></tr></thead>
+    <tbody>
+      {% for job in page %}
+      <tr>
+        <td><strong>{{ job.job_type }}</strong><br><small>#{{ job.pk }}</small></td>
+        <td><span class="status {{ job.status }}">{{ job.get_status_display }}</span></td>
+        <td>{{ job.requested_manually|yesno:"Manual,Automatic" }}</td>
+        <td>{% if job.progress_total %}{{ job.progress_current }}/{{ job.progress_total }}{% else %}—{% endif %}</td>
+        <td>{{ job.started_at|default:job.created_at }}</td>
+        <td>{{ job.finished_at|default:"—" }}</td>
+        <td>
+          {% if job.error %}<details><summary>Error</summary><pre>{{ job.error }}</pre></details>{% endif %}
+          {% if job.summary %}<details><summary>Summary</summary><pre>{{ job.summary }}</pre></details>{% endif %}
+          {% if job.celery_task_id %}<details><summary>Task ID</summary><code>{{ job.celery_task_id }}</code></details>{% endif %}
+          {% if not job.error and not job.summary and not job.celery_task_id %}—{% endif %}
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="7">No jobs match these filters.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?status={{ selected_status|urlencode }}&type={{ selected_type|urlencode }}&requested={{ selected_requested|urlencode }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?status={{ selected_status|urlencode }}&type={{ selected_type|urlencode }}&requested={{ selected_requested|urlencode }}&page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
+{% endblock %}

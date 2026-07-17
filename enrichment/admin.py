@@ -7,6 +7,7 @@ from enrichment.models import (
     ExternalIdentifier,
     ExternalTrack,
     JobRun,
+    MissingAlbum,
     NoteworthyEvidence,
     RelatedArtistEvidence,
     SourceRecord,
@@ -33,3 +34,4 @@ admin.site.register(AlbumGenreEvidence)
 admin.site.register(RelatedArtistEvidence)
 admin.site.register(ArtistSourceStatus)
 admin.site.register(ArtistRecommendation)
+admin.site.register(MissingAlbum)

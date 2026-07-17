@@ -20,7 +20,7 @@
     <p><a href="{% url 'playlist-output-roots' %}">Configure playlist output directories</a></p>
   </section>
   <section class="card">
-    <h2>Recent jobs</h2>
+    <div class="heading"><h2>Recent jobs</h2><a href="{% url 'job-history' %}">View all jobs</a></div>
     <table><thead><tr><th>Job</th><th>Status</th><th>Progress</th><th>Started</th></tr></thead><tbody>
     {% for job in jobs %}<tr><td>{{ job.job_type }}</td><td><span class="status {{ job.status }}">{{ job.get_status_display }}</span>{% if job.error %}<details><summary>Error</summary>{{ job.error }}</details>{% endif %}</td><td>{{ job.progress_current }}/{{ job.progress_total }}</td><td>{{ job.created_at }}</td></tr>
     {% empty %}<tr><td colspan="4">No jobs yet.</td></tr>{% endfor %}

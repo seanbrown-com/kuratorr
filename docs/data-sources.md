@@ -16,6 +16,8 @@ Official reference: <https://www.last.fm/api/show/artist.getTopTracks>
 
 Matches artists, browses release groups, stores MBIDs, gathers release-group genres/tags, and reads artist relationships. Release-group evidence is matched to local albums instead of applying a timeless artist-wide genre.
 
+MusicBrainz permits an average of one request per second per source IP. Kuratorr coordinates this limit across all Celery worker processes with a Redis lock and timestamp, rather than relying on a process-local delay. If Redis is temporarily unavailable, the client falls back to a local limiter and continues using bounded retries.
+
 Official reference: <https://musicbrainz.org/doc/MusicBrainz_API>
 
 ## Wikipedia
@@ -35,4 +37,3 @@ Official reference: <https://developers.google.com/youtube/v3/docs/search/list>
 ## Future related-artist evidence
 
 The schema supports additional source-specific relationship types. Good future candidates are setlist.fm for co-billing/touring evidence and Discogs for credits and membership, subject to API terms, rate limits, and separate provenance. They are not called by the current implementation.
-

@@ -5,7 +5,7 @@
 - **Django/Gunicorn:** authenticated operator UI, configuration, review, and exports.
 - **PostgreSQL:** canonical library entities, source observations, job history, review state, and playlist snapshots.
 - **Redis/Celery:** durable asynchronous scans, enrichment, playlist generation, and scheduled continuation.
-- **Celery Beat:** periodically queues a bounded number of artists whose configured sources have not yet been attempted. Failed sources remain visible and require a manual retry instead of consuming API quota forever.
+- **Celery Beat:** periodically queues a bounded number of artists whose configured sources have not yet been attempted and safely retries stale MusicBrainz transport failures.
 - **Nginx:** public TLS termination, static files, proxy headers, and request-size limits.
 
 ## Data boundaries
@@ -21,9 +21,13 @@
 1. Local raw tags are preserved exactly in `Track.raw_metadata`.
 2. External source payloads are never merged destructively.
 3. Normalized names exist only to search and match; display values remain intact.
-4. A fuzzy track score at or above 0.90 is auto-accepted; scores below 0.72 are not linked; the middle range is reviewable.
+4. Track matching compares whole normalized titles after removing common edition suffixes. A score at or above the configurable auto-accept threshold (default 0.95) is accepted, scores from the Review threshold (default 0.85) enter Review, and lower scores are rejected automatically.
 5. YouTube additionally requires an official-video confidence threshold and excludes known non-video formats.
 6. Accepted evidence contributes to playlists. Pending/rejected evidence does not.
+
+Wikipedia table/list parsing removes rendered citation nodes and trailing reference markers before storing a candidate title. During reconciliation, title confidence is recalculated from the current external and local titles rather than retaining a stale historical minimum; provider/artist identity confidence is evaluated separately.
+
+MusicBrainz album release groups that do not match a local album are materialized separately as `MissingAlbum` records. They appear on the Missing page and are reconciled whenever MusicBrainz enrichment runs again; singles and other non-album release groups are not presented as missing albums.
 7. Manual album genres take precedence over automatic genre selection.
 
 ## Scan semantics
@@ -35,6 +39,8 @@ Scans recurse only into `.mp3` and `.flac` files. Unchanged size and nanosecond 
 Jobs progress through queued, running, succeeded, failed, or cancelled states. A library scan queues a full enrichment run after successful completion. Full enrichment isolates source failures per artist and queues playlist generation after all artists have been attempted. All pipeline operations can also be started manually.
 
 Celery tasks are idempotent at their database boundaries: local files use `update_or_create`, source records use source/kind/external-ID uniqueness, evidence has source-specific uniqueness, and playlists use stable definition keys.
+
+The continuation task retries up to five MusicBrainz failures per cycle after a 15-minute cooling-off period. This prevents duplicate jobs while a slow request is still running and lets transient TLS or throttling failures recover without manual intervention.
 
 ## Playlist semantics
 

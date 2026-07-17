@@ -4,23 +4,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0F1312">
   <title>{% block title %}Kuratorr{% endblock %}</title>
+  <script>
+    try {
+      const savedTheme = localStorage.getItem("kuratorr-theme");
+      const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.dataset.theme = savedTheme || preferredTheme;
+    } catch (_) {
+      document.documentElement.dataset.theme = "dark";
+    }
+  </script>
+  <link rel="icon" href="{% static 'kuratorr/brand/favicon.svg' %}" type="image/svg+xml">
+  <link rel="icon" href="{% static 'kuratorr/brand/favicon-32.png' %}" sizes="32x32" type="image/png">
+  <link rel="icon" href="{% static 'kuratorr/brand/favicon-16.png' %}" sizes="16x16" type="image/png">
+  <link rel="shortcut icon" href="{% static 'kuratorr/brand/favicon.ico' %}">
+  <link rel="apple-touch-icon" href="{% static 'kuratorr/brand/apple-touch-icon.png' %}">
+  <link rel="manifest" href="{% static 'kuratorr/brand/site.webmanifest' %}">
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <script src="{% static 'js/theme.js' %}" defer></script>
 </head>
 <body>
-  <header>
-    <a class="brand" href="{% url 'dashboard' %}">Kuratorr</a>
+  <header class="app-header">
+    <a class="brand kuratorr-logo" href="{% url 'dashboard' %}" aria-label="Kuratorr home">
+      <img class="brand-logo brand-logo-dark" src="{% static 'kuratorr/brand/kuratorr-logo-horizontal-dark.svg' %}" alt="Kuratorr" width="980" height="128">
+      <img class="brand-logo brand-logo-light" src="{% static 'kuratorr/brand/kuratorr-logo-horizontal-light.svg' %}" alt="" width="980" height="128">
+    </a>
     {% if user.is_authenticated %}
-    <nav>
-      <a href="{% url 'track-list' %}">Tracks</a>
-      <a href="{% url 'artist-list' %}">Artists</a>
-      <a href="{% url 'artist-recommendations' %}">Recommendations</a>
-      <a href="{% url 'review-queue' %}">Review</a>
-      <a href="{% url 'playlist-list' %}">Playlists</a>
-      <a href="{% url 'settings' %}">Settings</a>
-      <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="link" type="submit">Log out</button></form>
+    <nav class="primary-nav" aria-label="Primary navigation">
+      <a class="{% if request.resolver_match.url_name == 'track-list' %}active{% endif %}" href="{% url 'track-list' %}">Tracks</a>
+      <a class="{% if request.resolver_match.url_name == 'artist-list' or request.resolver_match.url_name == 'artist-detail' %}active{% endif %}" href="{% url 'artist-list' %}">Artists</a>
+      <a class="{% if request.resolver_match.url_name == 'artist-recommendations' %}active{% endif %}" href="{% url 'artist-recommendations' %}">Discover</a>
+      <a class="{% if request.resolver_match.url_name == 'missing-albums' %}active{% endif %}" href="{% url 'missing-albums' %}">Missing</a>
+      <a class="{% if request.resolver_match.url_name == 'review-queue' %}active{% endif %}" href="{% url 'review-queue' %}">Review</a>
+      <a class="{% if 'playlist' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'playlist-list' %}">Playlists</a>
+      <a class="{% if request.resolver_match.url_name == 'job-history' %}active{% endif %}" href="{% url 'job-history' %}">Jobs</a>
+      <a class="{% if request.resolver_match.url_name == 'settings' %}active{% endif %}" href="{% url 'settings' %}">Settings</a>
+      <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="nav-action" type="submit">Log out</button></form>
     </nav>
     {% endif %}
+    <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme" title="Switch color theme"><span aria-hidden="true">◐</span></button>
   </header>
   <main>
     {% for message in messages %}<div class="message {{ message.tags }}">{{ message }}</div>{% endfor %}

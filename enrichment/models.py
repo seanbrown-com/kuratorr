@@ -219,3 +219,24 @@ class ArtistRecommendation(TimestampedModel):
 
     class Meta:
         ordering = ["rank", "name"]
+
+
+class MissingAlbum(TimestampedModel):
+    """An album release reported by a source but absent from the local library."""
+
+    artist = models.ForeignKey(Artist, on_delete=models.CASCADE, related_name="missing_albums")
+    source = models.CharField(max_length=30, choices=Source.choices)
+    source_record = models.ForeignKey(SourceRecord, on_delete=models.CASCADE)
+    external_id = models.CharField(max_length=1000)
+    title = models.CharField(max_length=700)
+    normalized_title = models.CharField(max_length=700, db_index=True)
+    year = models.PositiveSmallIntegerField(null=True, blank=True)
+    release_type = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ["artist__name", "year", "title"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["artist", "source", "external_id"], name="unique_missing_album"
+            )
+        ]

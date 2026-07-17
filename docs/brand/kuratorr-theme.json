@@ -1,0 +1,55 @@
+{
+  "brand": {
+    "name": "Kuratorr",
+    "direction": "Option C \u2014 monogram crate + curated music library",
+    "fonts": {
+      "display": {
+        "family": "Marcellus",
+        "fallback": "Georgia, 'Times New Roman', serif",
+        "use": "Wordmark, major page titles"
+      },
+      "ui": {
+        "family": "Manrope",
+        "fallback": "Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        "use": "Navigation, body copy, buttons, tables, forms"
+      },
+      "mono": {
+        "family": "IBM Plex Mono",
+        "fallback": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        "use": "Paths, filenames, scan logs, technical metadata"
+      }
+    }
+  },
+  "dark": {
+    "primary": "#1F3D34",
+    "secondary": "#B8854A",
+    "accent": "#C76F4A",
+    "background": "#0F1312",
+    "surface": "#1A1F1D",
+    "surface_alt": "#222925",
+    "text": "#E9E3D6",
+    "text_muted": "#9B9082",
+    "border": "#2B322F",
+    "hover": "#26352F",
+    "focus": "#D1A15E",
+    "success": "#6F8C6A",
+    "warning": "#D39B4A",
+    "danger": "#C45F55"
+  },
+  "light": {
+    "primary": "#5A6B4E",
+    "secondary": "#B8854A",
+    "accent": "#C76F4A",
+    "background": "#F7F4ED",
+    "surface": "#F0E8D9",
+    "surface_alt": "#FBF9F4",
+    "text": "#1A1C19",
+    "text_muted": "#7D756A",
+    "border": "#E2D8C6",
+    "hover": "#EBE2D3",
+    "focus": "#9B6C35",
+    "success": "#587458",
+    "warning": "#A86E20",
+    "danger": "#A84F46"
+  }
+}

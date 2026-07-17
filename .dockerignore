@@ -13,4 +13,4 @@ staticfiles
 .idea
 .DS_Store
 local-playlists
-legacy/spotipy-cache
+legacy

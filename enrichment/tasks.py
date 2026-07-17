@@ -1,5 +1,7 @@
+from datetime import timedelta
+
 from celery import shared_task
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from enrichment.clients import ProviderNotConfigured
@@ -113,6 +115,19 @@ def enrich_library_task(self, job_id=None):
 
 @shared_task
 def run_pending_enrichments():
+    retry_before = timezone.now() - timedelta(minutes=15)
+    failed_musicbrainz = list(
+        ArtistSourceStatus.objects.filter(source="musicbrainz")
+        .exclude(last_error="")
+        .filter(Q(last_attempted_at__isnull=True) | Q(last_attempted_at__lt=retry_before))
+        .select_related("artist")
+        .order_by("last_attempted_at")[:5]
+    )
+    if failed_musicbrainz:
+        for status in failed_musicbrainz:
+            enrich_artist_task.delay(status.artist_id, status.source)
+        return len(failed_musicbrainz)
+
     pending = Artist.objects.annotate(source_count=Count("source_statuses")).filter(
         source_count__lt=len(ENRICHERS)
     )[:5]

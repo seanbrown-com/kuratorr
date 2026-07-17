@@ -4,6 +4,9 @@ import time
 from urllib.parse import quote
 
 import requests
+from django.conf import settings
+from redis import Redis
+from redis.exceptions import RedisError
 
 from library.models import ServiceSettings
 
@@ -24,7 +27,7 @@ class BaseClient:
         self.session = requests.Session()
         service_settings = ServiceSettings.load()
         user_agent = service_settings.http_user_agent or os.getenv(
-            "HTTP_USER_AGENT", "Kuratorr/1.0 (admin@example.invalid)"
+            "HTTP_USER_AGENT", "Kuratorr/1.0 (https://github.com/seanbrown-com/kuratorr)"
         )
         self.session.headers.update({"User-Agent": user_agent})
 
@@ -33,6 +36,9 @@ class BaseClient:
             try:
                 response = self.session.request(method, url, timeout=30, **kwargs)
             except (requests.ConnectionError, requests.Timeout) as exc:
+                # Do not reuse a connection pool after a TLS/socket failure.
+                for adapter in self.session.adapters.values():
+                    adapter.close()
                 if attempt == self.max_attempts:
                     raise ApiError(
                         f"Request to {url} failed after {self.max_attempts} attempts: {exc}"
@@ -130,18 +136,64 @@ class MusicBrainzClient(BaseClient):
     endpoint = "https://musicbrainz.org/ws/2"
     request_lock = threading.Lock()
     last_request_at = 0.0
+    rate_redis = None
+    rate_lock_name = "kuratorr:musicbrainz:request-lock"
+    rate_timestamp_name = "kuratorr:musicbrainz:last-request-at"
 
     def __init__(self):
         super().__init__()
 
-    def json(self, method, url, **kwargs):
+    @classmethod
+    def _redis(cls):
+        if cls.rate_redis is None:
+            cls.rate_redis = Redis.from_url(
+                settings.CELERY_BROKER_URL,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+                decode_responses=True,
+            )
+        return cls.rate_redis
+
+    def _locally_limited_json(self, method, url, **kwargs):
+        """Fallback used only when Redis itself is unavailable."""
         with self.request_lock:
-            wait = 1.05 - (time.monotonic() - type(self).last_request_at)
+            wait = 1.1 - (time.monotonic() - type(self).last_request_at)
             if wait > 0:
                 time.sleep(wait)
-            result = super().json(method, url, **kwargs)
-            type(self).last_request_at = time.monotonic()
-            return result
+            try:
+                return super().json(method, url, **kwargs)
+            finally:
+                type(self).last_request_at = time.monotonic()
+
+    def json(self, method, url, **kwargs):
+        """Globally limit MusicBrainz across all Celery worker processes."""
+        try:
+            redis = self._redis()
+            lock = redis.lock(
+                self.rate_lock_name,
+                timeout=180,
+                blocking_timeout=240,
+            )
+            acquired = lock.acquire(blocking=True)
+        except RedisError:
+            return self._locally_limited_json(method, url, **kwargs)
+        if not acquired:
+            raise ApiError("Timed out waiting for the shared MusicBrainz request limit")
+        try:
+            try:
+                last_request_at = float(redis.get(self.rate_timestamp_name) or 0)
+            except (RedisError, TypeError, ValueError):
+                last_request_at = 0
+            wait = 1.1 - (time.time() - last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+            return super().json(method, url, **kwargs)
+        finally:
+            try:
+                redis.set(self.rate_timestamp_name, time.time(), ex=300)
+                lock.release()
+            except RedisError:
+                pass
 
     def find_artist(self, name):
         return self.json(

@@ -21,6 +21,7 @@ from enrichment.models import (
     Decision,
     ExternalIdentifier,
     ExternalTrack,
+    MissingAlbum,
     NoteworthyEvidence,
     RelatedArtistEvidence,
     Source,
@@ -32,6 +33,63 @@ from library.services import normalize_text
 
 def _score(left, right):
     return Decimal(str(round(fuzz.WRatio(normalize_text(left), normalize_text(right)) / 100, 3)))
+
+
+def _title_key(value):
+    """Normalize a song/album title while ignoring common edition suffixes."""
+    value = re.sub(
+        r"\s*[\[(][^\])]*(?:remaster(?:ed)?|version|edit|mix|mono|stereo|live)[^\])]*[\])]\s*$",
+        "",
+        value or "",
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"\s*[-–—:]\s*(?:\d{4}\s+)?(?:remaster(?:ed)?|radio edit|single edit|album version|"
+        r"original mix|mono|stereo|live)(?:\s+version)?\s*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return normalize_text(value).replace(" and ", " ")
+
+
+def _title_score(left, right):
+    left_key, right_key = _title_key(left), _title_key(right)
+    if not left_key or not right_key:
+        return Decimal("0")
+    if left_key == right_key:
+        return Decimal("1")
+    return Decimal(str(round(fuzz.ratio(left_key, right_key) / 100, 3)))
+
+
+def _clean_wikipedia_title(value):
+    """Remove rendered citation markers and unmatched display quotes from a title."""
+    value = re.sub(
+        r"(?:\s*\[\s*(?:\d+|[a-z])\s*\])+\s*$",
+        "",
+        value or "",
+        flags=re.IGNORECASE,
+    )
+    return value.strip().strip('"“”').strip()
+
+
+def _wikipedia_node_text(node):
+    clone = BeautifulSoup(str(node), "html.parser")
+    for reference in clone.select("sup.reference, .mw-ref, .reference"):
+        reference.decompose()
+    return clone.get_text(" ", strip=True)
+
+
+def _wikipedia_title_anchor(node):
+    return next(
+        (
+            anchor
+            for anchor in node.find_all("a")
+            if "cite_note" not in anchor.get("href", "")
+            and not anchor.find_parent("sup", class_="reference")
+        ),
+        None,
+    )
 
 
 def _record(source, kind, external_id, payload, url=""):
@@ -58,7 +116,7 @@ def _best_album_candidate(artist, album, candidates):
     for candidate in candidates:
         title = candidate.get("title", "")
         base_title = re.sub(r"\s*\(album\)\s*$", "", title, flags=re.IGNORECASE)
-        title_score = _score(album.title, base_title)
+        title_score = _title_score(album.title, base_title)
         snippet = BeautifulSoup(candidate.get("snippet", ""), "html.parser").get_text(" ")
         has_artist_context = normalize_text(artist.name) in normalize_text(f"{title} {snippet}")
         exact_album_title = normalize_text(base_title) == album.normalized_title
@@ -73,17 +131,22 @@ def _best_album_candidate(artist, album, candidates):
     return max(scored, key=lambda item: item[0]) if scored else (Decimal("0"), None)
 
 
-def _match_local_track(artist, title):
+def _match_local_track(artist, title, *, settings=None, tracks=None):
+    settings = settings or ServiceSettings.load()
+    tracks = tracks if tracks is not None else artist.tracks.filter(is_available=True)
     scored = sorted(
-        ((_score(title, track.title), track) for track in artist.tracks.filter(is_available=True)),
+        ((_title_score(title, track.title), track) for track in tracks),
         key=lambda x: x[0],
         reverse=True,
     )
     if not scored:
-        return None, Decimal("0"), Decision.PENDING
+        return None, Decimal("0"), Decision.REJECTED
     confidence, track = scored[0]
-    decision = Decision.ACCEPTED if confidence >= Decimal("0.90") else Decision.PENDING
-    return track if confidence >= Decimal("0.72") else None, confidence, decision
+    if confidence >= settings.track_match_auto_accept_threshold:
+        return track, confidence, Decision.ACCEPTED
+    if confidence >= settings.track_match_review_threshold:
+        return track, confidence, Decision.PENDING
+    return None, confidence, Decision.REJECTED
 
 
 def _external_track(source, record, artist, title, evidence_type, **data):
@@ -97,6 +160,8 @@ def _external_track(source, record, artist, title, evidence_type, **data):
         and source_confidence >= Decimal("0.85")
         else Decision.PENDING
     )
+    if decision == Decision.REJECTED:
+        evidence_decision = Decision.REJECTED
     if decision == Decision.ACCEPTED and not data.get("auto_qualifies", True):
         evidence_decision = Decision.REJECTED
     external, _ = ExternalTrack.objects.update_or_create(
@@ -270,10 +335,14 @@ def enrich_musicbrainz(artist):
         },
     )
     matched_albums = 0
+    MissingAlbum.objects.filter(artist=artist, source=Source.MUSICBRAINZ).delete()
     for release in client.release_groups(mbid):
+        release_title = release.get("title", "").strip()
+        if not release_title:
+            continue
         albums = Album.objects.filter(artist=artist)
         scored = sorted(
-            ((_score(release.get("title", ""), album.title), album) for album in albums),
+            ((_title_score(release_title, album.title), album) for album in albums),
             key=lambda x: x[0],
             reverse=True,
         )
@@ -286,7 +355,25 @@ def enrich_musicbrainz(artist):
             f"https://musicbrainz.org/release-group/{release['id']}",
         )
         if not album:
+            if release.get("primary-type") == "Album":
+                secondary_types = release.get("secondary-types") or []
+                release_type = " / ".join(secondary_types) or "Album"
+                MissingAlbum.objects.update_or_create(
+                    artist=artist,
+                    source=Source.MUSICBRAINZ,
+                    external_id=release["id"],
+                    defaults={
+                        "source_record": release_record,
+                        "title": release_title,
+                        "normalized_title": normalize_text(release_title),
+                        "year": _year(release.get("first-release-date")),
+                        "release_type": release_type,
+                    },
+                )
             continue
+        MissingAlbum.objects.filter(
+            artist=artist, source=Source.MUSICBRAINZ, external_id=release["id"]
+        ).delete()
         matched_albums += 1
         ExternalIdentifier.objects.update_or_create(
             source=Source.MUSICBRAINZ,
@@ -393,25 +480,26 @@ def _section_candidates(html):
                 row_title_index = max(0, title_index - missing_leading_cells) if title_index is not None else None
                 if row_title_index is not None and row_title_index < len(cells):
                     cell = cells[row_title_index]
-                    raw_title = cell.get_text(" ", strip=True)
+                    raw_title = _wikipedia_node_text(cell)
                     quoted = re.search(r'["“](.*?)["”]', raw_title)
-                    anchor = cell.find("a")
-                    title = (
+                    anchor = _wikipedia_title_anchor(cell)
+                    title = _clean_wikipedia_title(
                         quoted.group(1)
                         if quoted
                         else (anchor.get_text(" ", strip=True) if anchor else raw_title)
-                    ).strip('"“”')
+                    )
                     if title and normalize_text(title) not in {"title", "single", "song"}:
                         output.append((kind, title, current_year))
         elif element.name == "ul":
             for item in element.find_all("li", recursive=False):
-                quoted = re.search(r'["“](.*?)["”]', item.get_text(" ", strip=True))
-                anchor = item.find("a")
-                title = (
+                raw_title = _wikipedia_node_text(item)
+                quoted = re.search(r'["“](.*?)["”]', raw_title)
+                anchor = _wikipedia_title_anchor(item)
+                title = _clean_wikipedia_title(
                     quoted.group(1) if quoted else (anchor.get_text(strip=True) if anchor else "")
                 )
                 if title:
-                    output.append((kind, title, _year(item.get_text(" ", strip=True))))
+                    output.append((kind, title, _year(raw_title)))
     seen = set()
     return [
         x
@@ -683,14 +771,21 @@ def _youtube_title(raw_title, artist_name):
 
 def _youtube_confidence(item, artist):
     snippet = item.get("snippet", {})
-    text = f"{snippet.get('title', '')} {snippet.get('description', '')}".casefold()
+    description = snippet.get("description", "").casefold()
+    text = f"{snippet.get('title', '')} {description}".casefold()
     channel = snippet.get("channelTitle", "").casefold()
     if any(
         term in text
         for term in ("lyric video", "official audio", "visualizer", "audio only", "fan video")
     ):
         return Decimal("0")
-    if "official music video" not in text:
+    legacy_vevo_release = bool(
+        "vevo" in channel
+        and "music video by" in description
+        and "performing" in description
+        and normalize_text(artist.name) in normalize_text(description)
+    )
+    if "official music video" not in text and not legacy_vevo_release:
         return Decimal("0")
     if normalize_text(artist.name) not in normalize_text(channel) and "vevo" not in channel:
         return Decimal("0")
@@ -726,8 +821,8 @@ def enrich_youtube(artist):
             Decision.ACCEPTED
             if evidence.track
             and confidence >= settings.youtube_auto_accept_confidence
-            and external.match_confidence >= Decimal("0.9")
-            else Decision.PENDING
+            and external.match_confidence >= settings.track_match_auto_accept_threshold
+            else external.match_decision
         )
         evidence.notes = f"Channel: {snippet.get('channelTitle', '')}"
         evidence.save()
@@ -748,15 +843,50 @@ def refresh_noteworthy_decisions(artist=None):
     rejected = 0
     pending = 0
     changed = []
+    tracks_by_artist = {}
+    source_confidence_cache = {}
     now = timezone.now()
     for evidence in evidence_items:
         external = evidence.external_track
-        well_matched = bool(
-            evidence.track_id
-            and external
-            and external.match_confidence >= Decimal("0.90")
-            and evidence.confidence >= Decimal("0.85")
-        )
+        match_decision = Decision.REJECTED
+        if external:
+            if external.source_record.source == Source.WIKIPEDIA:
+                cleaned_title = _clean_wikipedia_title(external.title)
+                if cleaned_title:
+                    external.title = cleaned_title
+            local_tracks = tracks_by_artist.get(evidence.artist_id)
+            if local_tracks is None:
+                local_tracks = list(evidence.artist.tracks.filter(is_available=True))
+                tracks_by_artist[evidence.artist_id] = local_tracks
+            matched, match_confidence, match_decision = _match_local_track(
+                evidence.artist,
+                external.title,
+                settings=settings,
+                tracks=local_tracks,
+            )
+            external.matched_track = matched
+            external.match_confidence = match_confidence
+            evidence.track = matched
+            evidence.confidence = match_confidence
+            source_key = (evidence.artist_id, external.source_record.source)
+            if source_key not in source_confidence_cache:
+                source_confidence_cache[source_key] = (
+                    ExternalIdentifier.objects.filter(
+                        artist_id=evidence.artist_id,
+                        entity_kind="artist",
+                        source=external.source_record.source,
+                    )
+                    .order_by("-confidence")
+                    .values_list("confidence", flat=True)
+                    .first()
+                )
+            source_confidence = source_confidence_cache[source_key]
+            if (
+                match_decision == Decision.ACCEPTED
+                and source_confidence is not None
+                and source_confidence < Decimal("0.85")
+            ):
+                match_decision = Decision.PENDING
         qualifies = False
         reason = "Source item did not match a local track confidently."
         if evidence.evidence_type == NoteworthyEvidence.EvidenceType.SPOTIFY_TOP:
@@ -785,7 +915,10 @@ def refresh_noteworthy_decisions(artist=None):
             qualifies = confidence >= settings.youtube_auto_accept_confidence
             reason = "Requires an explicit official music video on the artist or VEVO channel."
 
-        if not well_matched:
+        if match_decision == Decision.REJECTED:
+            evidence.decision = Decision.REJECTED
+            rejected += 1
+        elif match_decision == Decision.PENDING:
             evidence.decision = Decision.PENDING
             pending += 1
         elif qualifies:
@@ -794,11 +927,22 @@ def refresh_noteworthy_decisions(artist=None):
         else:
             evidence.decision = Decision.REJECTED
             rejected += 1
+        if external:
+            external.match_decision = evidence.decision
+            external.save(
+                update_fields=[
+                    "matched_track",
+                    "title",
+                    "match_confidence",
+                    "match_decision",
+                    "updated_at",
+                ]
+            )
         evidence.notes = reason
         evidence.updated_at = now
         changed.append(evidence)
     NoteworthyEvidence.objects.bulk_update(
-        changed, ["decision", "notes", "updated_at"], batch_size=250
+        changed, ["track", "confidence", "decision", "notes", "updated_at"], batch_size=250
     )
     return {"accepted": accepted, "rejected": rejected, "pending": pending}
 

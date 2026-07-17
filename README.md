@@ -13,6 +13,7 @@ Kuratorr is a private, single-administrator Django service that scans mounted MP
 - Accepts YouTube candidates automatically only when both the local track match and official-video heuristic are strong. Lyrics, official-audio, visualizer, audio-only, and fan-video candidates are excluded.
 - Uses MusicBrainz release groups, genres/tags, and artist relationships; uses Last.fm similar artists.
 - Retains related artists even when they are absent from the library, then ranks recommendations by the number of distinct library artists linking to them while preserving source evidence.
+- Compares MusicBrainz album catalogs with the local collection and lists absent releases on a dedicated Missing page.
 - Selects up to three genres per album, with manual assignments taking precedence.
 - Builds Best of Artist, Year, Decade, Genre, Genre+Year, Genre+Decade, and Artist Radio playlists.
 - Requires aggregate and radio playlists to meet the configurable minimum duration (one hour by default).
@@ -86,7 +87,7 @@ automatic enrichment again.
 2. The worker reads changed/new MP3 and FLAC files, preserves raw metadata, and marks disappeared files unavailable.
 3. A complete scan queues library enrichment.
 4. Each source stores its response separately, proposes entity matches, and records noteworthy evidence.
-5. High-confidence matches are accepted; ambiguous and uncertain YouTube matches enter Review.
+5. Whole-title matches at or above the configured acceptance threshold are accepted; only close ambiguous matches enter Review, while unrelated titles are rejected automatically.
 6. Album genres are selected from accepted source evidence unless manually overridden.
 7. Playlist generation uses accepted noteworthy evidence and accepted related-artist evidence.
 8. Database playlists may optionally be written as M3U files to each enabled output directory.
