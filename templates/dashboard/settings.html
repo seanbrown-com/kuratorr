@@ -9,10 +9,19 @@
     <span class="tag">Last.fm: {{ form.instance.lastfm_configured|yesno:"Configured,Not configured" }}</span>
     <span class="tag">YouTube: {{ form.instance.youtube_configured|yesno:"Configured,Not configured" }}</span>
   </p>
-  <form method="post">{% csrf_token %}{{ form.as_p }}<button>Save settings</button></form>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button name="action" value="save_service_settings">Save settings</button></form>
 </section>
 <section class="card narrow">
   <h2>MusicBrainz</h2>
   <p>MusicBrainz read queries do not need an account or API key. Set the HTTP user agent above to a meaningful value such as <code>Kuratorr/1.0 (you@example.com)</code>; MusicBrainz requires application identification and contact information.</p>
+</section>
+<section class="card narrow" id="playlist-output-directories">
+  <h2>Playlist output directories</h2>
+  <p>When an enabled directory is configured, generated playlists can also be written to that server path. Without one, playlists remain available in Kuratorr’s database and as downloads.</p>
+  <form method="post">{% csrf_token %}{{ output_form.as_p }}<button name="action" value="add_playlist_output">Add output directory</button></form>
+  <table><thead><tr><th>Path</th><th>Enabled</th></tr></thead><tbody>
+    {% for root in playlist_output_roots %}<tr><td><code>{{ root.path }}</code></td><td>{{ root.enabled|yesno:"Yes,No" }}</td></tr>
+    {% empty %}<tr><td colspan="2">No output directories configured.</td></tr>{% endfor %}
+  </tbody></table>
 </section>
 {% endblock %}

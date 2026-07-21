@@ -11,13 +11,13 @@
 <div class="grid two">
   <section class="card">
     <h2>Pipeline</h2>
-    <p><a href="{% url 'root-list' %}">Configure and scan library roots</a></p>
-    <form method="post" action="{% url 'run-job' 'enrich_library' %}">{% csrf_token %}<button>Run all enrichment</button></form>
-    <form method="post" action="{% url 'run-job' 'refresh_recommendations' %}">{% csrf_token %}<button>Rank recommended artists</button></form>
-    <p><a href="{% url 'artist-recommendations' %}">Browse {{ recommendation_count }} artist recommendation{{ recommendation_count|pluralize }}</a></p>
-    <form method="post" action="{% url 'run-job' 'generate_playlists' %}">{% csrf_token %}<button>Generate playlists</button></form>
-    <form method="post" action="{% url 'run-job' 'materialize_playlists' %}">{% csrf_token %}<button>Write playlists to disk</button></form>
-    <p><a href="{% url 'playlist-output-roots' %}">Configure playlist output directories</a></p>
+    <div class="pipeline-actions">
+      <a class="button pipeline-action" href="{% url 'root-list' %}"><svg class="pipeline-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/><path d="M8 14h8M12 10v8"/></svg><span>Configure and Scan</span></a>
+      <form method="post" action="{% url 'run-job' 'enrich_library' %}">{% csrf_token %}<button class="pipeline-action"><svg class="pipeline-icon" aria-hidden="true" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg><span>Run all enrichment</span></button></form>
+      <form method="post" action="{% url 'run-job' 'refresh_recommendations' %}">{% csrf_token %}<button class="pipeline-action"><svg class="pipeline-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5-3.6-3.5 5-.7z"/></svg><span>Rank recommended artists</span></button></form>
+      <form method="post" action="{% url 'run-job' 'generate_playlists' %}">{% csrf_token %}<button class="pipeline-action"><svg class="pipeline-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h11M4 11h11M4 16h7"/><circle cx="17" cy="17" r="3"/><path d="M20 17V8"/></svg><span>Generate playlists</span></button></form>
+      <form method="post" action="{% url 'run-job' 'materialize_playlists' %}">{% csrf_token %}<button class="pipeline-action"><svg class="pipeline-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5zM8 3v6h8V3M8 16h8"/></svg><span>Write playlists to disk</span></button></form>
+    </div>
   </section>
   <section class="card">
     <div class="heading"><h2>Recent jobs</h2><a href="{% url 'job-history' %}">View all jobs</a></div>

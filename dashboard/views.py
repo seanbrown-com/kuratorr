@@ -11,7 +11,6 @@ from django.views.decorators.http import require_POST
 
 from dashboard.forms import InitialSetupForm, ServiceSettingsForm
 from enrichment.models import (
-    ArtistRecommendation,
     ArtistSourceStatus,
     Decision,
     JobRun,
@@ -21,6 +20,8 @@ from enrichment.tasks import enrich_library_task, refresh_artist_recommendations
 from enrichment.services import refresh_noteworthy_decisions
 from library.models import Album, Artist, LibraryRoot, ServiceSettings, Track
 from playlists.models import Playlist
+from playlists.forms import PlaylistOutputRootForm
+from playlists.models import PlaylistOutputRoot
 from playlists.tasks import generate_playlists_task, materialize_playlists_task
 
 
@@ -55,7 +56,6 @@ def dashboard(request):
         "track_count": Track.objects.filter(is_available=True).count(),
         "playlist_count": Playlist.objects.filter(deleted_at=None).count(),
         "pending_reviews": NoteworthyEvidence.objects.filter(decision=Decision.PENDING).count(),
-        "recommendation_count": ArtistRecommendation.objects.count(),
         "roots": LibraryRoot.objects.all(),
         "jobs": JobRun.objects.all()[:12],
     }
@@ -99,15 +99,32 @@ def job_history(request):
 @login_required
 def settings_view(request):
     instance = ServiceSettings.load()
-    form = ServiceSettingsForm(request.POST or None, instance=instance)
-    if request.method == "POST" and form.is_valid():
+    action = request.POST.get("action", "save_service_settings")
+    settings_data = request.POST if request.method == "POST" and action != "add_playlist_output" else None
+    output_data = request.POST if request.method == "POST" and action == "add_playlist_output" else None
+    form = ServiceSettingsForm(settings_data, instance=instance)
+    output_form = PlaylistOutputRootForm(output_data)
+    if request.method == "POST" and action == "add_playlist_output":
+        if output_form.is_valid():
+            output_form.save()
+            messages.success(request, "Playlist output directory added.")
+            return redirect("settings")
+    elif request.method == "POST" and form.is_valid():
         form.save()
         refresh_noteworthy_decisions()
         if form.updated_sources:
             ArtistSourceStatus.objects.filter(source__in=form.updated_sources).delete()
         messages.success(request, "Settings saved.")
         return redirect("settings")
-    return render(request, "dashboard/settings.html", {"form": form})
+    return render(
+        request,
+        "dashboard/settings.html",
+        {
+            "form": form,
+            "output_form": output_form,
+            "playlist_output_roots": PlaylistOutputRoot.objects.all(),
+        },
+    )
 
 
 @require_POST

@@ -17,7 +17,7 @@ from enrichment.models import (
     SourceRecord,
 )
 from library.models import LibraryRoot, ServiceSettings
-from playlists.models import Playlist
+from playlists.models import Playlist, PlaylistOutputRoot
 from playlists.services import generate_artist_playlists
 
 TEST_STORAGES = {
@@ -76,6 +76,31 @@ def test_track_list_shows_required_metadata(client, django_user_model, track):
     assert "kuratorr-logo-horizontal-dark.svg" in body
     assert "kuratorr/brand/site.webmanifest" in body
     assert "data-theme-toggle" in body
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_dashboard_pipeline_contains_only_icon_buttons(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+
+    body = client.get(reverse("dashboard")).content.decode()
+
+    assert all(
+        label in body
+        for label in (
+            "Configure and Scan",
+            "Run all enrichment",
+            "Rank recommended artists",
+            "Generate playlists",
+            "Write playlists to disk",
+        )
+    )
+    assert body.count('class="pipeline-icon"') == 5
+    assert "Browse 0 artist recommendations" not in body
+    assert "Configure playlist output directories" not in body
 
 
 @pytest.mark.django_db
@@ -279,3 +304,26 @@ def test_settings_page_encrypts_api_credentials(client, django_user_model):
     assert settings.get_secret("spotify_client_secret") == "spotify-secret"
     assert settings.get_secret("lastfm_api_key") == "lastfm-key"
     assert settings.get_secret("youtube_api_key") == "youtube-key"
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_settings_page_manages_playlist_output_directories(
+    client, django_user_model, tmp_path
+):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    output_path = tmp_path / "playlist-output"
+    client.force_login(user)
+
+    response = client.post(
+        reverse("settings"),
+        {"action": "add_playlist_output", "path": str(output_path), "enabled": "on"},
+    )
+
+    assert response.status_code == 302
+    assert PlaylistOutputRoot.objects.filter(path=str(output_path), enabled=True).exists()
+    body = client.get(reverse("settings")).content.decode()
+    assert "Playlist output directories" in body
+    assert str(output_path) in body

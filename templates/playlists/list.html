@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="heading"><h1>Playlists</h1><div><a href="{% url 'deleted-playlists' %}">Deleted playlists</a> · <a href="{% url 'playlist-output-roots' %}">Output directories</a></div></div>
+<div class="heading"><h1>Playlists</h1><div><a href="{% url 'deleted-playlists' %}">Deleted playlists</a> · <a href="{% url 'settings' %}#playlist-output-directories">Output directories</a></div></div>
 <section class="card narrow">
   <h2>Download all playlists</h2>
   <p>Enter the music directory as it exists on the computer or player where these M3U files will be used. The download is one ZIP containing every active playlist.</p>

@@ -4,8 +4,8 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from playlists.forms import PlaylistExportForm, PlaylistOutputRootForm
-from playlists.models import Playlist, PlaylistOutputRoot
+from playlists.forms import PlaylistExportForm
+from playlists.models import Playlist
 from playlists.services import (
     _safe_filename,
     delete_playlist,
@@ -120,11 +120,4 @@ def restore_view(request, pk):
 
 @login_required
 def output_roots(request):
-    form = PlaylistOutputRootForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        form.save()
-        messages.success(request, "Playlist output directory added.")
-        return redirect("playlist-output-roots")
-    return render(
-        request, "playlists/outputs.html", {"roots": PlaylistOutputRoot.objects.all(), "form": form}
-    )
+    return redirect("settings")

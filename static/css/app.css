@@ -219,6 +219,19 @@ button.secondary, .button.secondary { border-color: var(--color-border); backgro
 button.danger { background: var(--color-danger); color: #fff; }
 button.link { border: 0; background: none; color: var(--color-secondary); padding: 0; }
 
+.pipeline-actions { display: grid; gap: 10px; align-items: stretch; }
+.pipeline-actions form { margin: 0; }
+.pipeline-action {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 11px;
+  text-align: left;
+}
+.pipeline-icon { width: 20px; height: 20px; flex: 0 0 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--color-focus) 65%, transparent);
   outline-offset: 2px;
