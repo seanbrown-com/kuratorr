@@ -30,6 +30,12 @@ fi
 
 mkdir -p /var/backups/kuratorr
 
+# The updater itself runs as root, but Git intentionally runs as the restricted
+# service account. Repair metadata left behind by an earlier root-run Git command
+# so FETCH_HEAD, refs, and lock files remain writable by that account.
+log "Ensuring Git metadata belongs to kuratorr..."
+chown -R kuratorr:kuratorr "$APP_DIR/.git"
+
 log "Backing up PostgreSQL to $BACKUP_FILE (timeout: $BACKUP_TIMEOUT; compression: $BACKUP_COMPRESSION)..."
 timeout --foreground "$BACKUP_TIMEOUT" \
   runuser -u postgres -- pg_dump --format=custom --compress="$BACKUP_COMPRESSION" --verbose kuratorr > "$BACKUP_FILE"
