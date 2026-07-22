@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 from decimal import Decimal
 from urllib.parse import unquote
 
@@ -193,6 +194,54 @@ def _external_track(source, record, artist, title, evidence_type, **data):
         },
     )
     return external
+
+
+def missing_albums_with_notable_tracks(albums):
+    """Return missing releases that contain at least one source-qualified notable track."""
+    albums = list(albums)
+    if not albums:
+        return []
+    settings = ServiceSettings.load()
+    artist_ids = {album.artist_id for album in albums}
+    evidence_items = NoteworthyEvidence.objects.filter(
+        artist_id__in=artist_ids,
+        external_track__isnull=False,
+    ).select_related("external_track")
+    candidates = defaultdict(list)
+    for evidence in evidence_items:
+        external = evidence.external_track
+        if not external.album_title:
+            continue
+        qualifies = evidence.evidence_type in {
+            NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+            NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
+            NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL,
+        }
+        if evidence.evidence_type == NoteworthyEvidence.EvidenceType.SPOTIFY_TOP:
+            qualifies = bool(
+                external.rank and external.rank <= settings.spotify_noteworthy_max_rank
+            )
+        elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.LASTFM_TOP:
+            qualifies = bool(
+                external.rank
+                and external.rank <= settings.lastfm_noteworthy_max_rank
+                and external.playcount
+                and external.playcount >= settings.lastfm_min_playcount
+            )
+        if qualifies:
+            candidates[evidence.artist_id].append(external)
+
+    visible = []
+    for album in albums:
+        matches = {
+            external.pk
+            for external in candidates.get(album.artist_id, [])
+            if _title_score(album.title, external.album_title) >= Decimal("0.82")
+        }
+        if matches:
+            album.notable_track_count = len(matches)
+            visible.append(album)
+    return visible
 
 
 @transaction.atomic
@@ -477,7 +526,9 @@ def _section_candidates(html):
                 current_year = year or current_year
                 # Rowspans commonly omit a leading Year cell on subsequent singles.
                 missing_leading_cells = max(0, header_width - len(cells))
-                row_title_index = max(0, title_index - missing_leading_cells) if title_index is not None else None
+                row_title_index = (
+                    max(0, title_index - missing_leading_cells) if title_index is not None else None
+                )
                 if row_title_index is not None and row_title_index < len(cells):
                     cell = cells[row_title_index]
                     raw_title = _wikipedia_node_text(cell)
@@ -552,8 +603,10 @@ def _album_infobox_singles(html):
             for item in items:
                 quoted = re.search(r'["“](.*?)["”]', item.get_text(" ", strip=True))
                 anchor = item.find("a")
-                title = quoted.group(1) if quoted else (
-                    anchor.get_text(" ", strip=True) if anchor else ""
+                title = (
+                    quoted.group(1)
+                    if quoted
+                    else (anchor.get_text(" ", strip=True) if anchor else "")
                 )
                 if title and normalize_text(title) != "released":
                     singles.append(title.strip())
@@ -972,9 +1025,9 @@ def refresh_artist_recommendations():
     local_artists = {artist.normalized_name: artist for artist in Artist.objects.all()}
     buckets = {}
     reconciled = []
-    evidence_items = RelatedArtistEvidence.objects.exclude(decision=Decision.REJECTED).select_related(
-        "artist"
-    )
+    evidence_items = RelatedArtistEvidence.objects.exclude(
+        decision=Decision.REJECTED
+    ).select_related("artist")
     for evidence in evidence_items:
         normalized = normalize_text(evidence.related_artist_name)
         if not normalized or normalized == evidence.artist.normalized_name:

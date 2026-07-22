@@ -65,5 +65,13 @@ class PlaylistOutputRoot(TimestampedModel):
     path = models.CharField(max_length=2048, unique=True)
     enabled = models.BooleanField(default=True)
 
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        return cls.objects.order_by("pk").first()
+
     def __str__(self):
         return self.path

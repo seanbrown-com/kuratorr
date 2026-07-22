@@ -5,18 +5,6 @@ from django import forms
 from playlists.models import PlaylistOutputRoot
 
 
-class PlaylistExportForm(forms.Form):
-    source_directory = forms.CharField(
-        max_length=4096,
-        label="Source music directory",
-        help_text=(
-            "The directory on the computer where the downloaded playlist will be used. "
-            "Track paths are written relative to this directory."
-        ),
-        widget=forms.TextInput(attrs={"placeholder": "/Volumes/Music or D:\\Music"}),
-    )
-
-
 class PlaylistOutputRootForm(forms.ModelForm):
     class Meta:
         model = PlaylistOutputRoot

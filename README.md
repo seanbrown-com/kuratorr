@@ -6,20 +6,20 @@ Kuratorr is a private, single-administrator Django service that scans mounted MP
 
 - Scans one or more server-side directories without uploading audio.
 - Reads MP3 ID3 and FLAC Vorbis metadata, technical audio properties, filesystem size, and modification time.
-- Stores artists, albums, tracks, album-level genres, raw tags, and scan errors.
+- Stores artists, albums, tracks, album-level genres, the selected file metadata used by the application, and scan errors.
 - Keeps local, MusicBrainz, Spotify, Last.fm, Wikipedia, and YouTube observations separate with source payloads, URLs, IDs, timestamps, match confidence, and review decisions.
 - Uses Spotify artist-top-track ranking and Last.fm play counts independently. Spotify does not expose raw public play counts.
 - Extracts Wikipedia singles and music-video mentions from inconsistent tables and lists.
 - Accepts YouTube candidates automatically only when both the local track match and official-video heuristic are strong. Lyrics, official-audio, visualizer, audio-only, and fan-video candidates are excluded.
 - Uses MusicBrainz release groups, genres/tags, and artist relationships; uses Last.fm similar artists.
 - Retains related artists even when they are absent from the library, then ranks recommendations by the number of distinct library artists linking to them while preserving source evidence.
-- Compares MusicBrainz album catalogs with the local collection and lists absent releases on a dedicated Missing page.
+- Compares MusicBrainz album catalogs with the local collection and lists absent releases with source-qualified notable tracks on a filterable Missing page.
 - Selects up to three genres per album, with manual assignments taking precedence.
 - Builds Best of Artist, Year, Decade, Genre, Genre+Year, Genre+Decade, and Artist Radio playlists.
 - Requires aggregate and radio playlists to meet the configurable minimum duration (one hour by default).
-- Stores playlists and ordered entries in PostgreSQL, with optional atomic M3U materialization to server directories.
+- Stores playlists and ordered entries in PostgreSQL, with optional atomic M3U materialization beneath one server output directory, organized by playlist type.
 - Supports soft deletion, permanent regeneration suppression, a deleted-playlist review screen, and restoration.
-- Downloads portable M3U files using a user-supplied external music path, a ZIP containing all active playlists, or a two-argument Bash script that copies a playlist into a same-named destination directory.
+- Downloads individual M3U files, a browser-delivered ZIP containing all active playlists in type folders, or a two-argument Bash script that copies a playlist into a same-named destination directory.
 - Records every manually or automatically started job and its outcome.
 
 ## Quick local start (Docker)
@@ -88,14 +88,14 @@ eligible for automatic enrichment again.
 
 1. An administrator adds a mounted library root and starts a scan.
 2. The worker reads changed/new MP3 and FLAC files, preserves raw metadata, and marks disappeared files unavailable.
-3. A complete scan queues library enrichment.
-4. Each source stores its response separately, proposes entity matches, and records noteworthy evidence.
+3. A complete scan stops after importing local tags and filesystem metadata; enrichment is started manually from the dashboard.
+4. Manual library enrichment queues one child job per available artist. Each source stores its response separately, proposes entity matches, and records noteworthy evidence while the parent job tracks child completion.
 5. Whole-title matches at or above the configured acceptance threshold are accepted; only close ambiguous matches enter Review, while unrelated titles are rejected automatically.
 6. Album genres are selected from accepted source evidence unless manually overridden.
 7. Playlist generation uses accepted noteworthy evidence and accepted related-artist evidence.
 8. Database playlists may optionally be written as M3U files to each enabled output directory.
 
-Every stage is also available manually from the dashboard or artist page.
+Queued and running jobs can be cancelled from Job History. Jobs without a worker heartbeat are reconciled to Failed instead of remaining Running indefinitely.
 
 ## Native development
 
@@ -143,14 +143,14 @@ Update an installed service as root:
 /opt/kuratorr/scripts/update-from-git.sh
 ```
 
-The updater creates a timestamped PostgreSQL backup, requires a fast-forward Git pull, installs dependency changes, migrates, collects static files, restarts services, and displays their status.
+The updater logs and times each stage, creates a verbose timestamped PostgreSQL backup, requires a non-interactive fast-forward Git pull, installs dependency changes, migrates, collects static files, restarts services, and displays their status.
 
 See [architecture](docs/architecture.md), [data-source behavior](docs/data-sources.md), and the [deployment runbook](docs/deployment.md).
 
 ## Important operational notes
 
 - Only files accessible inside the service/container can be scanned or copied.
-- Downloaded copy scripts take `SOURCE_DIR` and `DESTINATION_DIR`; downloaded M3Us use the external source directory entered at download time.
+- Downloaded copy scripts take `SOURCE_DIR` and `DESTINATION_DIR`; downloaded M3Us use the full server paths stored for their tracks.
 - A normal deletion and a permanently suppressed deletion both remain restorable. Permanent means generation skips that exact definition until restoration.
 - External matching is intentionally conservative. Rejected evidence is preserved as provenance but never contributes to playlists.
 - No artist or album imagery is downloaded or displayed.

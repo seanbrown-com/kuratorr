@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
+from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -11,6 +12,7 @@ from enrichment.models import (
     MissingAlbum,
     NoteworthyEvidence,
 )
+from enrichment.services import missing_albums_with_notable_tracks
 from enrichment.tasks import ENRICHERS, enrich_artist_task
 from library.models import Artist
 
@@ -30,15 +32,31 @@ def recommendations(request):
 def missing_albums(request):
     albums = MissingAlbum.objects.select_related("artist", "source_record")
     query = request.GET.get("q", "").strip()
+    release_type = request.GET.get("release_type", "").strip()
+    release_types = list(
+        MissingAlbum.objects.exclude(release_type="")
+        .order_by("release_type")
+        .values_list("release_type", flat=True)
+        .distinct()
+    )
     if query:
-        albums = albums.filter(artist__name__icontains=query) | albums.filter(
-            title__icontains=query
-        )
-    page = Paginator(albums, 100).get_page(request.GET.get("page"))
+        albums = albums.filter(Q(artist__name__icontains=query) | Q(title__icontains=query))
+    if release_type in release_types:
+        albums = albums.filter(release_type=release_type)
+    else:
+        release_type = ""
+    page = Paginator(missing_albums_with_notable_tracks(albums), 100).get_page(
+        request.GET.get("page")
+    )
     return render(
         request,
         "enrichment/missing_albums.html",
-        {"page": page, "query": query},
+        {
+            "page": page,
+            "query": query,
+            "release_types": release_types,
+            "selected_release_type": release_type,
+        },
     )
 
 

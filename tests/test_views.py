@@ -6,10 +6,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from enrichment.models import (
     ArtistRecommendation,
     Decision,
+    ExternalTrack,
     JobRun,
     MissingAlbum,
     NoteworthyEvidence,
@@ -80,6 +82,22 @@ def test_track_list_shows_required_metadata(client, django_user_model, track):
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
+def test_artist_page_uses_searchable_table(client, django_user_model, track):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("artist-list"), {"q": "Deft"})
+    body = response.content.decode()
+
+    assert response.status_code == 200
+    assert all(value in body for value in ("<table>", "Deftones", "Available tracks"))
+    assert "card-list" not in body
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
 def test_dashboard_pipeline_contains_only_icon_buttons(client, django_user_model):
     user = django_user_model.objects.create_superuser(
         "admin", password="Very-Long-Test-Passphrase!"
@@ -105,9 +123,7 @@ def test_dashboard_pipeline_contains_only_icon_buttons(client, django_user_model
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
-def test_playlist_downloads_use_external_source_and_bulk_zip(
-    client, django_user_model, track, artist
-):
+def test_playlist_downloads_use_server_paths_and_bulk_zip(client, django_user_model, track, artist):
     user = django_user_model.objects.create_superuser(
         "admin", password="Very-Long-Test-Passphrase!"
     )
@@ -122,26 +138,19 @@ def test_playlist_downloads_use_external_source_and_bulk_zip(
     playlist = Playlist.objects.get()
     client.force_login(user)
 
-    assert client.get(reverse("download-m3u", args=[playlist.pk])).status_code == 405
-    response = client.post(
-        reverse("download-m3u", args=[playlist.pk]),
-        {"source_directory": "/media/music"},
-    )
+    response = client.get(reverse("download-m3u", args=[playlist.pk]))
     assert response.status_code == 200
-    assert b"/media/music/Change.mp3" in response.content
-    assert track.full_path.encode() not in response.content
+    assert track.full_path.encode() in response.content
 
     response = client.get(reverse("download-copy-script", args=[playlist.pk]))
     assert b"SOURCE_DIR DESTINATION_DIR" in response.content
     assert track.full_path.encode() not in response.content
 
-    response = client.post(
-        reverse("download-all-m3u"), {"source_directory": "/media/music"}
-    )
+    response = client.get(reverse("download-all-m3u"))
     assert response.status_code == 200
     assert response["Content-Type"] == "application/zip"
-    with ZipFile(BytesIO(response.content)) as archive:
-        assert b"/media/music/Change.mp3" in archive.read("Best_of_Deftones.m3u")
+    with ZipFile(BytesIO(b"".join(response.streaming_content))) as archive:
+        assert track.full_path.encode() in archive.read("best of artist/Best_of_Deftones.m3u")
 
 
 @pytest.mark.django_db
@@ -172,9 +181,7 @@ def test_library_root_page_adds_selected_directory(client, django_user_model, tm
     )
     client.force_login(user)
 
-    response = client.post(
-        reverse("root-list"), {"path": str(tmp_path), "enabled": "on"}
-    )
+    response = client.post(reverse("root-list"), {"path": str(tmp_path), "enabled": "on"})
 
     assert response.status_code == 302
     assert LibraryRoot.objects.filter(path=str(tmp_path), enabled=True).exists()
@@ -235,9 +242,56 @@ def test_job_history_lists_and_filters_all_jobs(client, django_user_model):
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
-def test_missing_albums_page_lists_release_and_navigation(
-    client, django_user_model, artist
-):
+def test_job_history_reconciles_impossible_running_job(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    job = JobRun.objects.create(
+        job_type="scan_library",
+        status=JobRun.Status.RUNNING,
+        started_at=timezone.now(),
+        finished_at=timezone.now(),
+    )
+    client.force_login(user)
+
+    client.get(reverse("job-history"))
+
+    job.refresh_from_db()
+    assert job.status == JobRun.Status.FAILED
+    assert "heartbeat" in job.error
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_job_history_can_cancel_running_job(client, django_user_model, monkeypatch):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    job = JobRun.objects.create(
+        job_type="enrich_library",
+        status=JobRun.Status.RUNNING,
+        celery_task_id="task-123",
+        started_at=timezone.now(),
+        heartbeat_at=timezone.now(),
+    )
+    revoked = []
+    monkeypatch.setattr(
+        "enrichment.job_control.current_app.control.revoke",
+        lambda task_id, terminate=False: revoked.append((task_id, terminate)),
+    )
+    client.force_login(user)
+
+    response = client.post(reverse("cancel-job", args=[job.pk]))
+
+    assert response.status_code == 302
+    job.refresh_from_db()
+    assert job.status == JobRun.Status.CANCELLED
+    assert revoked == [("task-123", False)]
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_missing_albums_page_lists_release_and_navigation(client, django_user_model, artist):
     user = django_user_model.objects.create_superuser(
         "admin", password="Very-Long-Test-Passphrase!"
     )
@@ -258,13 +312,55 @@ def test_missing_albums_page_lists_release_and_navigation(
         year=2006,
         release_type="Album",
     )
+    hidden_record = SourceRecord.objects.create(
+        source=Source.MUSICBRAINZ,
+        entity_kind="release_group",
+        external_id="missing-without-notable-tracks",
+        fetched_at=timezone.now(),
+    )
+    MissingAlbum.objects.create(
+        artist=artist,
+        source=Source.MUSICBRAINZ,
+        source_record=hidden_record,
+        external_id="missing-without-notable-tracks",
+        title="No Notable Songs Here",
+        normalized_title="no notable songs here",
+        year=2010,
+        release_type="Album",
+    )
+    track_record = SourceRecord.objects.create(
+        source=Source.SPOTIFY,
+        entity_kind="track",
+        external_id="notable-missing-track",
+        fetched_at=__import__("django.utils.timezone", fromlist=["now"]).now(),
+    )
+    external = ExternalTrack.objects.create(
+        source_record=track_record,
+        artist=artist,
+        artist_name=artist.name,
+        title="Hole in the Earth",
+        album_title="Saturday Night Wrist",
+        rank=1,
+        match_decision=Decision.REJECTED,
+    )
+    NoteworthyEvidence.objects.create(
+        artist=artist,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.SPOTIFY_TOP,
+        confidence=Decimal("0"),
+        decision=Decision.REJECTED,
+    )
     client.force_login(user)
 
-    response = client.get(reverse("missing-albums"))
+    response = client.get(reverse("missing-albums"), {"release_type": "Album"})
     body = response.content.decode()
 
     assert response.status_code == 200
-    assert all(value in body for value in ("Missing", "Deftones", "Saturday Night Wrist", "2006"))
+    assert all(
+        value in body
+        for value in ("Missing", "Deftones", "Saturday Night Wrist", "2006", "Release type")
+    )
+    assert "No Notable Songs Here" not in body
 
 
 @pytest.mark.django_db
@@ -307,10 +403,45 @@ def test_settings_page_encrypts_api_credentials(client, django_user_model):
 
 
 @pytest.mark.django_db
-@override_settings(STORAGES=TEST_STORAGES)
-def test_settings_page_manages_playlist_output_directories(
-    client, django_user_model, tmp_path
+@override_settings(STORAGES=TEST_STORAGES, SECRET_KEY="credential-test-secret")
+def test_http_user_agent_save_does_not_run_synchronous_reconciliation(
+    client, django_user_model, monkeypatch
 ):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    monkeypatch.setattr(
+        "dashboard.views.refresh_noteworthy_decisions_task.delay",
+        lambda *args, **kwargs: pytest.fail("unrelated user-agent save queued reconciliation"),
+    )
+    client.force_login(user)
+
+    response = client.post(
+        reverse("settings"),
+        {
+            "spotify_max_tracks": 20,
+            "spotify_noteworthy_max_rank": 2,
+            "lastfm_min_playcount": 1000,
+            "lastfm_max_tracks": 50,
+            "lastfm_noteworthy_max_rank": 2,
+            "minimum_playlist_seconds": 3600,
+            "max_album_genres": 3,
+            "spotify_market": "US",
+            "youtube_max_results": 25,
+            "youtube_auto_accept_confidence": "0.900",
+            "track_match_review_threshold": "0.850",
+            "track_match_auto_accept_threshold": "0.950",
+            "http_user_agent": "Kuratorr/1.0 (admin@example.com)",
+        },
+    )
+
+    assert response.status_code == 302
+    assert ServiceSettings.load().http_user_agent == "Kuratorr/1.0 (admin@example.com)"
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_settings_page_manages_playlist_output_directories(client, django_user_model, tmp_path):
     user = django_user_model.objects.create_superuser(
         "admin", password="Very-Long-Test-Passphrase!"
     )
@@ -319,11 +450,20 @@ def test_settings_page_manages_playlist_output_directories(
 
     response = client.post(
         reverse("settings"),
-        {"action": "add_playlist_output", "path": str(output_path), "enabled": "on"},
+        {"action": "save_playlist_output", "path": str(output_path), "enabled": "on"},
     )
 
     assert response.status_code == 302
     assert PlaylistOutputRoot.objects.filter(path=str(output_path), enabled=True).exists()
     body = client.get(reverse("settings")).content.decode()
-    assert "Playlist output directories" in body
+    assert "Playlist output directory" in body
     assert str(output_path) in body
+
+    replacement = tmp_path / "replacement-output"
+    response = client.post(
+        reverse("settings"),
+        {"action": "save_playlist_output", "path": str(replacement), "enabled": "on"},
+    )
+    assert response.status_code == 302
+    assert PlaylistOutputRoot.objects.count() == 1
+    assert PlaylistOutputRoot.load().path == str(replacement)

@@ -27,6 +27,13 @@ class JobRun(TimestampedModel):
         CANCELLED = "cancelled", "Cancelled"
 
     job_type = models.CharField(max_length=80, db_index=True)
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="child_jobs",
+    )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.QUEUED, db_index=True
     )
@@ -34,6 +41,7 @@ class JobRun(TimestampedModel):
     requested_manually = models.BooleanField(default=False)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True, db_index=True)
     progress_current = models.PositiveIntegerField(default=0)
     progress_total = models.PositiveIntegerField(default=0)
     summary = models.JSONField(default=dict)

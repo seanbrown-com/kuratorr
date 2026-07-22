@@ -48,9 +48,26 @@ curl -fsS https://YOUR_DOMAIN/health/
 
 ## Update and recover
 
-Run `scripts/update-from-git.sh` as root. Backups are written under `/var/backups/kuratorr` before code or schema changes. Retention is intentionally left to the host's backup policy.
+Run `scripts/update-from-git.sh` as root. The updater prints and times every stage, shows verbose PostgreSQL backup progress, refuses concurrent update runs, and disables interactive Git credential prompts. Backups are written under `/var/backups/kuratorr` before code or schema changes. Retention is intentionally left to the host's backup policy. Custom-format backups use fast level-1 compression by default. Override it with `KURATORR_BACKUP_COMPRESSION` (`0` favors maximum speed and disk usage); the stage timeouts can be overridden with `KURATORR_BACKUP_TIMEOUT`, `KURATORR_GIT_TIMEOUT`, `KURATORR_PACKAGE_TIMEOUT`, and `KURATORR_DJANGO_TIMEOUT`.
 
 To restore a backup, stop application services, create/empty the target database according to your recovery policy, then use `pg_restore`. Test restoration on a non-production database before relying on it.
+
+## Reset the catalog
+
+To deliberately discard the entire catalog and start over, first update the
+checkout so the new schema and reset script are present, then run:
+
+```bash
+sudo /opt/kuratorr/scripts/reset-database.sh --yes-delete-everything
+```
+
+This recreates PostgreSQL with UTF-8 encoding and applies every migration. It
+permanently deletes users, application settings, library roots, tracks,
+enrichment data, jobs, and playlists. `/opt/kuratorr/.env` is not changed, so
+environment-based API credentials and service configuration are retained.
+Return to Kuratorr afterward to create the sole admin account again, restore the
+Settings and library root, and run **Configure and Scan**. Enrichment remains a
+separate manual step.
 
 ## Security checklist
 

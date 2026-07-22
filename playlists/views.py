@@ -1,10 +1,11 @@
+from io import BytesIO
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from playlists.forms import PlaylistExportForm
 from playlists.models import Playlist
 from playlists.services import (
     _safe_filename,
@@ -29,7 +30,6 @@ def playlist_list(request):
             "playlists": playlists,
             "selected_type": playlist_type,
             "types": Playlist.PlaylistType.choices,
-            "export_form": PlaylistExportForm(),
         },
     )
 
@@ -47,47 +47,30 @@ def playlist_detail(request, pk):
     return render(
         request,
         "playlists/detail.html",
-        {"playlist": playlist, "export_form": PlaylistExportForm()},
+        {"playlist": playlist},
     )
 
 
-@require_POST
 @login_required
 def download_m3u(request, pk):
     playlist = get_object_or_404(Playlist, pk=pk, deleted_at=None)
-    form = PlaylistExportForm(request.POST)
-    if not form.is_valid():
-        return render(request, "playlists/detail.html", {"playlist": playlist, "export_form": form})
     response = HttpResponse(
-        render_m3u(playlist, form.cleaned_data["source_directory"]),
+        render_m3u(playlist),
         content_type="audio/x-mpegurl",
     )
     response["Content-Disposition"] = f'attachment; filename="{_safe_filename(playlist.name)}.m3u"'
     return response
 
 
-@require_POST
 @login_required
 def download_all_m3u(request):
-    form = PlaylistExportForm(request.POST)
     playlists = Playlist.objects.filter(deleted_at=None)
-    if not form.is_valid():
-        return render(
-            request,
-            "playlists/list.html",
-            {
-                "playlists": playlists,
-                "selected_type": "",
-                "types": Playlist.PlaylistType.choices,
-                "export_form": form,
-            },
-        )
-    response = HttpResponse(
-        render_m3u_zip(playlists, form.cleaned_data["source_directory"]),
+    return FileResponse(
+        BytesIO(render_m3u_zip(playlists)),
+        as_attachment=True,
+        filename="kuratorr-playlists.zip",
         content_type="application/zip",
     )
-    response["Content-Disposition"] = 'attachment; filename="playlists.zip"'
-    return response
 
 
 @login_required

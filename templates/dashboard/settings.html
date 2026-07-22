@@ -15,13 +15,10 @@
   <h2>MusicBrainz</h2>
   <p>MusicBrainz read queries do not need an account or API key. Set the HTTP user agent above to a meaningful value such as <code>Kuratorr/1.0 (you@example.com)</code>; MusicBrainz requires application identification and contact information.</p>
 </section>
-<section class="card narrow" id="playlist-output-directories">
-  <h2>Playlist output directories</h2>
-  <p>When an enabled directory is configured, generated playlists can also be written to that server path. Without one, playlists remain available in Kuratorr’s database and as downloads.</p>
-  <form method="post">{% csrf_token %}{{ output_form.as_p }}<button name="action" value="add_playlist_output">Add output directory</button></form>
-  <table><thead><tr><th>Path</th><th>Enabled</th></tr></thead><tbody>
-    {% for root in playlist_output_roots %}<tr><td><code>{{ root.path }}</code></td><td>{{ root.enabled|yesno:"Yes,No" }}</td></tr>
-    {% empty %}<tr><td colspan="2">No output directories configured.</td></tr>{% endfor %}
-  </tbody></table>
+<section class="card narrow" id="playlist-output-directory">
+  <h2>Playlist output directory</h2>
+  <p>Kuratorr supports one server-side output directory. Written playlists are organized beneath it by playlist type. Disable it to keep playlists only in the database and browser downloads.</p>
+  <form method="post">{% csrf_token %}{{ output_form.as_p }}<button name="action" value="save_playlist_output">Save output directory</button></form>
+  {% if playlist_output_root %}<p>Current directory: <code>{{ playlist_output_root.path }}</code></p>{% endif %}
 </section>
 {% endblock %}

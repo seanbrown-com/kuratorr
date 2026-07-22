@@ -1,8 +1,8 @@
 import re
 import shlex
-from io import BytesIO
 from collections import defaultdict
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from io import BytesIO
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from django.db import transaction
@@ -11,6 +11,16 @@ from django.utils import timezone
 from enrichment.models import Decision, NoteworthyEvidence, RelatedArtistEvidence
 from library.models import Artist, ServiceSettings
 from playlists.models import Playlist, PlaylistOutputRoot, PlaylistTrack
+
+PLAYLIST_DIRECTORIES = {
+    Playlist.PlaylistType.ARTIST: "best of artist",
+    Playlist.PlaylistType.YEAR: "best of year",
+    Playlist.PlaylistType.DECADE: "best of decades",
+    Playlist.PlaylistType.GENRE: "best of genres",
+    Playlist.PlaylistType.GENRE_YEAR: "genres by year",
+    Playlist.PlaylistType.GENRE_DECADE: "genres by decade",
+    Playlist.PlaylistType.ARTIST_RADIO: "artist radio",
+}
 
 
 def _safe_filename(name):
@@ -194,54 +204,50 @@ def generate_radio_playlists():
     return created
 
 
-def _export_track_path(track, source_directory):
-    if not source_directory:
-        return track.full_path
-    relative_parts = PurePosixPath(track.relative_path.replace("\\", "/")).parts
-    if re.match(r"^[A-Za-z]:[\\/]", source_directory) or (
-        "\\" in source_directory and "/" not in source_directory
-    ):
-        return str(PureWindowsPath(source_directory).joinpath(*relative_parts))
-    return str(PurePosixPath(source_directory).joinpath(*relative_parts))
+def playlist_relative_path(playlist):
+    directory = PLAYLIST_DIRECTORIES[playlist.playlist_type]
+    return Path(directory) / f"{_safe_filename(playlist.name)}.m3u"
 
 
-def render_m3u(playlist, source_directory=None):
+def render_m3u(playlist):
     lines = ["#EXTM3U"]
     for entry in playlist.entries.select_related("track", "track__artist"):
         track = entry.track
         display = f"{track.artist.name} - {track.title}".replace("\r", " ").replace("\n", " ")
         lines.append(f"#EXTINF:{int(track.duration_seconds or 0)},{display}")
-        lines.append(_export_track_path(track, source_directory))
+        lines.append(track.full_path)
     return "\n".join(lines) + "\n"
 
 
-def render_m3u_zip(playlists, source_directory):
+def render_m3u_zip(playlists):
     archive = BytesIO()
     used_names = set()
     with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
         for playlist in playlists:
             base_name = _safe_filename(playlist.name)
-            filename = f"{base_name}.m3u"
+            filename = str(playlist_relative_path(playlist)).replace("\\", "/")
             if filename.casefold() in used_names:
-                filename = f"{base_name}-{playlist.pk}.m3u"
+                directory = PLAYLIST_DIRECTORIES[playlist.playlist_type]
+                filename = f"{directory}/{base_name}-{playlist.pk}.m3u"
             used_names.add(filename.casefold())
-            zip_file.writestr(filename, render_m3u(playlist, source_directory))
+            zip_file.writestr(filename, render_m3u(playlist))
     return archive.getvalue()
 
 
 def materialize_playlist(playlist):
-    written = []
-    for output_root in PlaylistOutputRoot.objects.filter(enabled=True):
-        root = Path(output_root.path)
-        root.mkdir(parents=True, exist_ok=True)
-        destination = root / f"{_safe_filename(playlist.name)}.m3u"
-        temporary = destination.with_suffix(".m3u.tmp")
-        temporary.write_text(render_m3u(playlist), encoding="utf-8")
-        temporary.replace(destination)
-        written.append(str(destination))
-    playlist.output_path = written[0] if written else ""
+    output_root = PlaylistOutputRoot.load()
+    if not output_root or not output_root.enabled:
+        playlist.output_path = ""
+        playlist.save(update_fields=["output_path", "updated_at"])
+        return []
+    destination = Path(output_root.path) / playlist_relative_path(playlist)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(".m3u.tmp")
+    temporary.write_text(render_m3u(playlist), encoding="utf-8")
+    temporary.replace(destination)
+    playlist.output_path = str(destination)
     playlist.save(update_fields=["output_path", "updated_at"])
-    return written
+    return [str(destination)]
 
 
 def materialize_all():

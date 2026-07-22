@@ -6,11 +6,12 @@ import pytest
 
 from enrichment.models import Decision, NoteworthyEvidence
 from library.models import ServiceSettings
-from playlists.models import Playlist
+from playlists.models import Playlist, PlaylistOutputRoot
 from playlists.services import (
     delete_playlist,
     generate_artist_playlists,
     generate_grouped_playlists,
+    materialize_playlist,
     render_copy_script,
     render_m3u,
     render_m3u_zip,
@@ -65,12 +66,11 @@ def test_deleted_playlist_is_not_regenerated_and_can_restore(evidence):
 def test_exports_include_ordered_track_metadata_and_safe_path(evidence, track):
     generate_artist_playlists()
     playlist = Playlist.objects.get()
-    m3u = render_m3u(playlist, "/Volumes/External Music")
+    m3u = render_m3u(playlist)
     script = render_copy_script(playlist)
     assert m3u.startswith("#EXTM3U")
     assert "Deftones - Change" in m3u
-    assert "/Volumes/External Music/Change.mp3" in m3u
-    assert track.full_path not in m3u
+    assert track.full_path in m3u
     assert "set -euo pipefail" in script
     assert "SOURCE_DIR DESTINATION_DIR" in script
     assert 'source_root="$1"' in script
@@ -82,10 +82,23 @@ def test_exports_include_ordered_track_metadata_and_safe_path(evidence, track):
 
 
 @pytest.mark.django_db
-def test_all_playlists_zip_uses_external_source_directory(evidence):
+def test_all_playlists_zip_uses_type_directories(evidence, track):
     generate_artist_playlists()
-    content = render_m3u_zip(Playlist.objects.all(), r"D:\Music")
+    content = render_m3u_zip(Playlist.objects.all())
     with ZipFile(BytesIO(content)) as archive:
-        assert archive.namelist() == ["Best_of_Deftones.m3u"]
+        assert archive.namelist() == ["best of artist/Best_of_Deftones.m3u"]
         m3u = archive.read(archive.namelist()[0]).decode()
-    assert r"D:\Music\Change.mp3" in m3u
+    assert track.full_path in m3u
+
+
+@pytest.mark.django_db
+def test_materialized_playlists_use_single_root_and_type_directory(evidence, tmp_path):
+    generate_artist_playlists()
+    playlist = Playlist.objects.get()
+    PlaylistOutputRoot.objects.create(path=str(tmp_path), enabled=True)
+
+    written = materialize_playlist(playlist)
+
+    expected = tmp_path / "best of artist" / "Best_of_Deftones.m3u"
+    assert written == [str(expected)]
+    assert expected.exists()

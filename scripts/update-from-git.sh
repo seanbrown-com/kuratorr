@@ -12,6 +12,7 @@ APP_DIR=/opt/kuratorr
 STAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_FILE="/var/backups/kuratorr/kuratorr-$STAMP.dump"
 BACKUP_TIMEOUT=${KURATORR_BACKUP_TIMEOUT:-30m}
+BACKUP_COMPRESSION=${KURATORR_BACKUP_COMPRESSION:-1}
 GIT_TIMEOUT=${KURATORR_GIT_TIMEOUT:-5m}
 PACKAGE_TIMEOUT=${KURATORR_PACKAGE_TIMEOUT:-20m}
 DJANGO_TIMEOUT=${KURATORR_DJANGO_TIMEOUT:-10m}
@@ -29,9 +30,9 @@ fi
 
 mkdir -p /var/backups/kuratorr
 
-log "Backing up PostgreSQL to $BACKUP_FILE (timeout: $BACKUP_TIMEOUT)..."
+log "Backing up PostgreSQL to $BACKUP_FILE (timeout: $BACKUP_TIMEOUT; compression: $BACKUP_COMPRESSION)..."
 timeout --foreground "$BACKUP_TIMEOUT" \
-  runuser -u postgres -- pg_dump --format=custom --verbose kuratorr > "$BACKUP_FILE"
+  runuser -u postgres -- pg_dump --format=custom --compress="$BACKUP_COMPRESSION" --verbose kuratorr > "$BACKUP_FILE"
 log "Database backup complete: $(du -h "$BACKUP_FILE" | cut -f1)."
 
 log "Pulling the latest fast-forward Git revision (timeout: $GIT_TIMEOUT)..."

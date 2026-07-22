@@ -4,10 +4,11 @@ from pathlib import Path
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from enrichment.job_control import reconcile_stale_jobs
 from enrichment.models import JobRun
 from library.forms import LibraryRootForm
 from library.models import Artist, LibraryRoot, Track
@@ -64,7 +65,19 @@ def track_list(request):
 
 @login_required
 def artist_list(request):
-    return render(request, "library/artist_list.html", {"artists": Artist.objects.all()})
+    query = request.GET.get("q", "").strip()
+    artists = (
+        Artist.objects.filter(tracks__is_available=True)
+        .annotate(
+            album_count=Count("albums", distinct=True),
+            track_count=Count("tracks", distinct=True),
+        )
+        .distinct()
+    )
+    if query:
+        artists = artists.filter(name__icontains=query)
+    page = Paginator(artists, 100).get_page(request.GET.get("page"))
+    return render(request, "library/artist_list.html", {"page": page, "query": query})
 
 
 @login_required
@@ -100,6 +113,12 @@ def root_list(request):
 @login_required
 def scan_root(request, pk):
     root = get_object_or_404(LibraryRoot, pk=pk)
+    reconcile_stale_jobs()
+    if JobRun.objects.filter(
+        job_type="scan_library", status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING]
+    ).exists():
+        messages.warning(request, "A library scan is already queued or running.")
+        return redirect("root-list")
     job = JobRun.objects.create(job_type="scan_library", requested_manually=True)
     result = scan_root_task.delay(root.pk, job.pk)
     job.celery_task_id = result.id

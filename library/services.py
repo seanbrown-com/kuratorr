@@ -54,11 +54,7 @@ def _mp3_metadata(path):
         "disc": _first(tags, "TPOS"),
         "genres": [str(x) for x in tags.getall("TCON")],
     }
-    raw = {
-        key: [str(x) for x in value] if isinstance(value, list) else str(value)
-        for key, value in tags.items()
-    }
-    return values, raw, audio.info
+    return values, audio.info
 
 
 def _flac_metadata(path):
@@ -74,13 +70,12 @@ def _flac_metadata(path):
         "disc": _first(tags, "discnumber"),
         "genres": list(tags.get("genre", [])),
     }
-    raw = {key: [str(x) for x in value] for key, value in tags.items()}
-    return values, raw, audio.info
+    return values, audio.info
 
 
 def read_audio_metadata(path):
     parser = _mp3_metadata if path.suffix.lower() == ".mp3" else _flac_metadata
-    values, raw, info = parser(path)
+    values, info = parser(path)
     if not values["title"] or not values["artist"]:
         raise ValueError("Required title or artist tag is missing")
     values["album_artist"] = values["album_artist"] or values["artist"]
@@ -93,7 +88,6 @@ def read_audio_metadata(path):
         "bitrate": getattr(info, "bitrate", None),
         "sample_rate": getattr(info, "sample_rate", None),
         "channels": getattr(info, "channels", None),
-        "raw": raw,
     }
 
 
@@ -175,7 +169,6 @@ def import_file(root, path):
             "channels": metadata["channels"],
             "file_size": stat.st_size,
             "file_modified_ns": stat.st_mtime_ns,
-            "raw_metadata": metadata["raw"],
             "is_available": True,
             "scan_error": "",
         },
@@ -187,15 +180,20 @@ def import_file(root, path):
     return track, created
 
 
-def scan_library_root(root):
+def scan_library_root(root, progress_callback=None):
     base = Path(root.path).resolve()
     if not base.is_dir():
         raise ValueError(f"Library root does not exist or is not a directory: {base}")
+    files = [
+        path
+        for path in base.rglob("*")
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+    ]
     seen = []
     summary = {"found": 0, "created": 0, "updated_or_unchanged": 0, "errors": 0}
-    for path in base.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            continue
+    if progress_callback:
+        progress_callback(0, len(files))
+    for index, path in enumerate(files, 1):
         summary["found"] += 1
         seen.append(str(path))
         try:
@@ -208,6 +206,8 @@ def scan_library_root(root):
                 full_path=str(path),
                 defaults={"error": str(exc), "resolved_at": None},
             )
+        if progress_callback:
+            progress_callback(index, len(files))
     Track.objects.filter(library_root=root).exclude(full_path__in=seen).update(is_available=False)
     root.last_scanned_at = timezone.now()
     root.save(update_fields=["last_scanned_at", "updated_at"])

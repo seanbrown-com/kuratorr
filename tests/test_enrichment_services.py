@@ -654,6 +654,19 @@ def test_pending_enrichment_retries_stale_musicbrainz_failures(artist, monkeypat
 
 
 @pytest.mark.django_db
+def test_pending_scheduler_does_not_start_unrequested_artist_enrichment(artist, monkeypatch):
+    from enrichment.tasks import enrich_artist_task, run_pending_enrichments
+
+    monkeypatch.setattr(
+        enrich_artist_task,
+        "delay",
+        lambda *args, **kwargs: pytest.fail("unrequested enrichment was queued"),
+    )
+
+    assert run_pending_enrichments() == 0
+
+
+@pytest.mark.django_db
 def test_rate_limited_source_is_deferred_until_retry_time(artist, monkeypatch):
     from enrichment.models import ArtistSourceStatus
     from enrichment.tasks import (
@@ -691,3 +704,36 @@ def test_rate_limited_source_is_deferred_until_retry_time(artist, monkeypatch):
     status.save(update_fields=["retry_at"])
     assert run_pending_enrichments() == 1
     assert queued == [(artist.pk, Source.YOUTUBE)]
+
+
+@pytest.mark.django_db
+def test_library_enrichment_children_advance_parent_progress(track, monkeypatch):
+    from enrichment.models import JobRun
+    from enrichment.tasks import (
+        ENRICHERS,
+        enrich_artist_task,
+        enrich_library_task,
+        refresh_artist_recommendations_task,
+    )
+    from playlists.tasks import generate_playlists_task
+
+    for source in ENRICHERS:
+        monkeypatch.setitem(ENRICHERS, source, lambda current_artist: {"processed": 1})
+    monkeypatch.setattr(refresh_artist_recommendations_task, "delay", lambda: None)
+    monkeypatch.setattr(generate_playlists_task, "delay", lambda: None)
+
+    def run_child(artist_id, source=None, job_id=None):
+        enrich_artist_task(artist_id, source, job_id)
+        return type("Result", (), {"id": f"child-{job_id}"})()
+
+    monkeypatch.setattr(enrich_artist_task, "delay", run_child)
+    parent = JobRun.objects.create(job_type="enrich_library", requested_manually=True)
+
+    result = enrich_library_task(parent.pk)
+
+    parent.refresh_from_db()
+    child = parent.child_jobs.get()
+    assert result == {"queued": 1}
+    assert parent.status == JobRun.Status.SUCCEEDED
+    assert (parent.progress_current, parent.progress_total) == (1, 1)
+    assert child.status == JobRun.Status.SUCCEEDED

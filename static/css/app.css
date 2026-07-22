@@ -196,7 +196,7 @@ input, select, textarea {
 }
 input:hover, select:hover, textarea:hover { border-color: var(--color-text-muted); }
 input[type="checkbox"] { width: auto; accent-color: var(--color-secondary); }
-input[name="source_directory"], input[name="path"] { font-family: var(--font-mono); }
+input[name="path"] { font-family: var(--font-mono); }
 label { color: var(--color-text); font-weight: 600; }
 form p label { display: block; margin-bottom: 5px; }
 .helptext { display: block; margin-top: 4px; color: var(--color-text-muted); font-size: .78rem; font-weight: 400; }

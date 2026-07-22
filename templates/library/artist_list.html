@@ -1,3 +1,9 @@
 {% extends "base.html" %}
-{% block content %}<h1>Artists</h1><div class="card-list">{% for artist in artists %}<a class="card" href="{% url 'artist-detail' artist.pk %}"><strong>{{ artist.name }}</strong><span>{{ artist.albums.count }} albums · {{ artist.tracks.count }} tracks</span></a>{% empty %}<p>No artists imported.</p>{% endfor %}</div>{% endblock %}
-
+{% block content %}
+<h1>Artists</h1>
+<form class="search" method="get"><input name="q" value="{{ query }}" placeholder="Search artists"><button>Search</button></form>
+<table><thead><tr><th>Artist</th><th>Albums</th><th>Available tracks</th></tr></thead><tbody>
+{% for artist in page %}<tr><td><a href="{% url 'artist-detail' artist.pk %}"><strong>{{ artist.name }}</strong></a></td><td>{{ artist.album_count }}</td><td>{{ artist.track_count }}</td></tr>
+{% empty %}<tr><td colspan="3">No artists found.</td></tr>{% endfor %}</tbody></table>
+{% if page.has_other_pages %}<div class="pagination">{% if page.has_previous %}<a href="?q={{ query|urlencode }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?q={{ query|urlencode }}&page={{ page.next_page_number }}">Next</a>{% endif %}</div>{% endif %}
+{% endblock %}

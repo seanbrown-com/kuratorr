@@ -6,22 +6,25 @@ from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.http import HttpResponse, HttpResponseForbidden
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from dashboard.forms import InitialSetupForm, ServiceSettingsForm
+from enrichment.job_control import cancel_job, reconcile_stale_jobs
 from enrichment.models import (
     ArtistSourceStatus,
     Decision,
     JobRun,
     NoteworthyEvidence,
 )
-from enrichment.tasks import enrich_library_task, refresh_artist_recommendations_task
-from enrichment.services import refresh_noteworthy_decisions
+from enrichment.tasks import (
+    enrich_library_task,
+    refresh_artist_recommendations_task,
+    refresh_noteworthy_decisions_task,
+)
 from library.models import Album, Artist, LibraryRoot, ServiceSettings, Track
-from playlists.models import Playlist
 from playlists.forms import PlaylistOutputRootForm
-from playlists.models import PlaylistOutputRoot
+from playlists.models import Playlist, PlaylistOutputRoot
 from playlists.tasks import generate_playlists_task, materialize_playlists_task
 
 
@@ -50,6 +53,7 @@ def health(request):
 
 @login_required
 def dashboard(request):
+    reconcile_stale_jobs()
     context = {
         "artist_count": Artist.objects.count(),
         "album_count": Album.objects.count(),
@@ -64,6 +68,7 @@ def dashboard(request):
 
 @login_required
 def job_history(request):
+    reconcile_stale_jobs()
     jobs = JobRun.objects.all()
     selected_status = request.GET.get("status", "")
     selected_type = request.GET.get("type", "")
@@ -99,21 +104,45 @@ def job_history(request):
 @login_required
 def settings_view(request):
     instance = ServiceSettings.load()
+    # Newly created singleton defaults can retain Python floats until reloaded;
+    # normalize them to the database field types before comparing form values.
+    instance.refresh_from_db()
+    decision_fields = {
+        "spotify_noteworthy_max_rank",
+        "lastfm_min_playcount",
+        "lastfm_noteworthy_max_rank",
+        "youtube_auto_accept_confidence",
+        "track_match_review_threshold",
+        "track_match_auto_accept_threshold",
+    }
+    original_decision_values = {field: getattr(instance, field) for field in decision_fields}
     action = request.POST.get("action", "save_service_settings")
-    settings_data = request.POST if request.method == "POST" and action != "add_playlist_output" else None
-    output_data = request.POST if request.method == "POST" and action == "add_playlist_output" else None
+    output_root = PlaylistOutputRoot.objects.order_by("pk").first()
+    settings_data = (
+        request.POST if request.method == "POST" and action != "save_playlist_output" else None
+    )
+    output_data = (
+        request.POST if request.method == "POST" and action == "save_playlist_output" else None
+    )
     form = ServiceSettingsForm(settings_data, instance=instance)
-    output_form = PlaylistOutputRootForm(output_data)
-    if request.method == "POST" and action == "add_playlist_output":
+    output_form = PlaylistOutputRootForm(output_data, instance=output_root)
+    if request.method == "POST" and action == "save_playlist_output":
         if output_form.is_valid():
-            output_form.save()
-            messages.success(request, "Playlist output directory added.")
+            saved_root = output_form.save()
+            PlaylistOutputRoot.objects.exclude(pk=saved_root.pk).delete()
+            messages.success(request, "Playlist output directory saved.")
             return redirect("settings")
     elif request.method == "POST" and form.is_valid():
         form.save()
-        refresh_noteworthy_decisions()
         if form.updated_sources:
             ArtistSourceStatus.objects.filter(source__in=form.updated_sources).delete()
+        if any(
+            form.cleaned_data[field] != original_decision_values[field] for field in decision_fields
+        ):
+            job = JobRun.objects.create(job_type="refresh_noteworthy_decisions")
+            result = refresh_noteworthy_decisions_task.delay(job_id=job.pk)
+            job.celery_task_id = result.id
+            job.save(update_fields=["celery_task_id", "updated_at"])
         messages.success(request, "Settings saved.")
         return redirect("settings")
     return render(
@@ -122,7 +151,7 @@ def settings_view(request):
         {
             "form": form,
             "output_form": output_form,
-            "playlist_output_roots": PlaylistOutputRoot.objects.all(),
+            "playlist_output_root": output_root,
         },
     )
 
@@ -138,9 +167,26 @@ def run_job(request, job_type):
     }
     if job_type not in callbacks:
         return HttpResponse("Unknown job", status=404)
+    if JobRun.objects.filter(
+        job_type=job_type, status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING]
+    ).exists():
+        messages.warning(request, f"{job_type.replace('_', ' ').title()} is already active.")
+        return redirect("dashboard")
     job = JobRun.objects.create(job_type=job_type, requested_manually=True)
     result = callbacks[job_type].delay(job_id=job.pk)
     job.celery_task_id = result.id
     job.save(update_fields=["celery_task_id", "updated_at"])
     messages.success(request, f"{job_type.replace('_', ' ').title()} queued.")
     return redirect("dashboard")
+
+
+@require_POST
+@login_required
+def cancel_job_view(request, pk):
+    job = get_object_or_404(JobRun, pk=pk)
+    if job.status not in [JobRun.Status.QUEUED, JobRun.Status.RUNNING]:
+        messages.warning(request, "Only queued or running jobs can be cancelled.")
+    else:
+        cancelled = cancel_job(job)
+        messages.success(request, f"Cancelled {cancelled} queued or running job(s).")
+    return redirect(request.POST.get("next") or "job-history")

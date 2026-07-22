@@ -225,7 +225,6 @@ class Track(TimestampedModel):
     channels = models.PositiveSmallIntegerField(null=True, blank=True)
     file_size = models.PositiveBigIntegerField(default=0)
     file_modified_ns = models.PositiveBigIntegerField(default=0)
-    raw_metadata = models.JSONField(default=dict)
     is_available = models.BooleanField(default=True, db_index=True)
     scan_error = models.TextField(blank=True)
 

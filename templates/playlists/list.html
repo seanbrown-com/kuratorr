@@ -1,14 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="heading"><h1>Playlists</h1><div><a href="{% url 'deleted-playlists' %}">Deleted playlists</a> · <a href="{% url 'settings' %}#playlist-output-directories">Output directories</a></div></div>
+<div class="heading"><h1>Playlists</h1><div><a href="{% url 'deleted-playlists' %}">Deleted playlists</a> · <a href="{% url 'settings' %}#playlist-output-directory">Output directory</a></div></div>
 <section class="card narrow">
   <h2>Download all playlists</h2>
-  <p>Enter the music directory as it exists on the computer or player where these M3U files will be used. The download is one ZIP containing every active playlist.</p>
-  <form method="post" action="{% url 'download-all-m3u' %}">
-    {% csrf_token %}
-    {{ export_form.as_p }}
-    <button>Download all as ZIP</button>
-  </form>
+  <p>Download one ZIP containing every active playlist, organized into folders by playlist type.</p>
+  <a class="button" href="{% url 'download-all-m3u' %}">Download all as ZIP</a>
 </section>
 <form class="filter" method="get"><label>Type <select name="type"><option value="">All</option>{% for value,label in types %}<option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><button>Filter</button></form>
 <table><thead><tr><th>Name</th><th>Type</th><th>Tracks</th><th>Duration</th><th>Generated</th></tr></thead><tbody>

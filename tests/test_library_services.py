@@ -3,7 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from library.models import AlbumGenre, ScanIssue
+from enrichment.models import JobRun
+from library.models import AlbumGenre, ScanIssue, Track
 from library.services import (
     import_file,
     normalize_text,
@@ -27,6 +28,10 @@ def test_parse_year():
     assert parse_year("unknown") is None
 
 
+def test_track_model_does_not_persist_raw_metadata():
+    assert "raw_metadata" not in {field.name for field in Track._meta.fields}
+
+
 @pytest.mark.django_db
 def test_import_file_creates_entities_and_genre(root, tmp_path):
     path = tmp_path / "track.mp3"
@@ -44,7 +49,6 @@ def test_import_file_creates_entities_and_genre(root, tmp_path):
         "sample_rate": 44100,
         "channels": 2,
         "genres": ["Alternative Metal; Nu Metal"],
-        "raw": {"TIT2": "My Own Summer"},
     }
     with patch("library.services.read_audio_metadata", return_value=metadata):
         track, created = import_file(root, path)
@@ -71,3 +75,25 @@ def test_scan_records_bad_file(root, tmp_path):
     summary = scan_library_root(root)
     assert summary["errors"] == 1
     assert ScanIssue.objects.filter(full_path=str(path), resolved_at=None).exists()
+
+
+@pytest.mark.django_db
+def test_scan_task_reports_progress_without_starting_enrichment(root, monkeypatch):
+    from library.tasks import scan_root_task
+
+    def fake_scan(current_root, progress_callback):
+        progress_callback(0, 2)
+        progress_callback(1, 2)
+        progress_callback(2, 2)
+        return {"found": 2, "created": 2, "updated_or_unchanged": 0, "errors": 0}
+
+    monkeypatch.setattr("library.tasks.scan_library_root", fake_scan)
+    job = JobRun.objects.create(job_type="scan_library", requested_manually=True)
+
+    result = scan_root_task(root.pk, job.pk)
+
+    job.refresh_from_db()
+    assert result["found"] == 2
+    assert job.status == JobRun.Status.SUCCEEDED
+    assert (job.progress_current, job.progress_total) == (2, 2)
+    assert not JobRun.objects.exclude(pk=job.pk).exists()

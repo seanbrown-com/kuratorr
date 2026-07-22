@@ -1,6 +1,6 @@
 from celery import shared_task
-from django.utils import timezone
 
+from enrichment.job_control import JobCancelled, finish_job, start_job, touch_job
 from enrichment.models import JobRun
 from playlists.services import (
     generate_artist_playlists,
@@ -12,22 +12,18 @@ from playlists.services import (
 
 def _run(job_type, callback, job_id=None, task_id=""):
     job = JobRun.objects.get(pk=job_id) if job_id else JobRun.objects.create(job_type=job_type)
-    job.status = JobRun.Status.RUNNING
-    job.started_at = timezone.now()
-    job.celery_task_id = task_id
-    job.save()
     try:
+        start_job(job, task_id)
         result = callback()
-        job.summary = {"processed": result}
-        job.status = JobRun.Status.SUCCEEDED
-        return job.summary
+        touch_job(job.pk)
+        summary = {"processed": result}
+        finish_job(job, JobRun.Status.SUCCEEDED, summary=summary)
+        return summary
+    except JobCancelled:
+        return {"cancelled": True}
     except Exception as exc:
-        job.status = JobRun.Status.FAILED
-        job.error = str(exc)
+        finish_job(job, JobRun.Status.FAILED, error=str(exc))
         raise
-    finally:
-        job.finished_at = timezone.now()
-        job.save()
 
 
 @shared_task(bind=True)
