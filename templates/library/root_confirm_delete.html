@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Remove library root{% endblock %}
+{% block content %}
+<div class="heading"><div><h1>Remove library root</h1><p>This permanently removes the selected library and its associated catalog data.</p></div></div>
+<section class="card danger-zone">
+  <h2><code>{{ root.path }}</code></h2>
+  <p>This will delete approximately <strong>{{ track_count }} tracks</strong> across {{ album_count }} albums and {{ artist_count }} track artists. Albums and artists shared with another configured library are preserved. Playlists containing removed tracks are deleted because they would no longer be valid.</p>
+  <p>The audio files on disk are never deleted.</p>
+  {% if active_jobs %}<p class="message error">A job is queued or running. Cancel it or wait for it to finish before removing this library.</p>{% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <label><input type="checkbox" name="confirm" value="yes" required> I understand this permanently deletes the associated database records.</label>
+    <div class="actions">
+      <button class="danger"{% if active_jobs %} disabled{% endif %}>Permanently remove library</button>
+      <a class="button secondary" href="{% url 'root-list' %}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

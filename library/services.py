@@ -3,6 +3,7 @@ import unicodedata
 from pathlib import Path
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
@@ -178,6 +179,98 @@ def import_file(root, path):
         resolved_at=timezone.now()
     )
     return track, created
+
+
+@transaction.atomic
+def delete_library_root(root):
+    """Delete a root and catalog records no longer used by another root."""
+    from enrichment.models import (
+        AlbumGenreEvidence,
+        ExternalIdentifier,
+        ExternalTrack,
+        MissingAlbum,
+        RelatedArtistEvidence,
+        SourceRecord,
+    )
+    from playlists.models import Playlist
+
+    tracks = Track.objects.filter(library_root=root)
+    track_ids = list(tracks.values_list("pk", flat=True))
+    album_ids = set(tracks.values_list("album_id", flat=True))
+    artist_ids = set(tracks.values_list("artist_id", flat=True))
+    artist_ids.update(Album.objects.filter(pk__in=album_ids).values_list("artist_id", flat=True))
+    genre_ids = set(
+        AlbumGenre.objects.filter(album_id__in=album_ids).values_list("genre_id", flat=True)
+    )
+    source_record_ids = set(
+        ExternalIdentifier.objects.filter(
+            Q(track_id__in=track_ids) | Q(album_id__in=album_ids) | Q(artist_id__in=artist_ids)
+        ).values_list("source_record_id", flat=True)
+    )
+    source_record_ids.update(
+        ExternalTrack.objects.filter(artist_id__in=artist_ids).values_list(
+            "source_record_id", flat=True
+        )
+    )
+    source_record_ids.update(
+        AlbumGenreEvidence.objects.filter(album_id__in=album_ids).values_list(
+            "source_record_id", flat=True
+        )
+    )
+    source_record_ids.update(
+        RelatedArtistEvidence.objects.filter(
+            Q(artist_id__in=artist_ids) | Q(related_artist_id__in=artist_ids)
+        ).values_list("source_record_id", flat=True)
+    )
+    source_record_ids.update(
+        MissingAlbum.objects.filter(artist_id__in=artist_ids).values_list(
+            "source_record_id", flat=True
+        )
+    )
+    source_record_ids.discard(None)
+
+    affected_playlists = Playlist.objects.filter(entries__track_id__in=track_ids).distinct()
+    playlist_count = affected_playlists.count()
+    affected_playlists.delete()
+    track_count = tracks.count()
+    tracks.delete()
+    root_path = root.path
+    root.delete()
+
+    orphaned_albums = Album.objects.filter(pk__in=album_ids, tracks__isnull=True)
+    album_count = orphaned_albums.count()
+    orphaned_albums.delete()
+    orphaned_artists = Artist.objects.filter(
+        pk__in=artist_ids, tracks__isnull=True, albums__isnull=True
+    )
+    artist_count = orphaned_artists.count()
+    orphaned_artists.delete()
+    Genre.objects.filter(
+        pk__in=genre_ids,
+        album_assignments__isnull=True,
+        album_evidence__isnull=True,
+        playlists__isnull=True,
+    ).delete()
+
+    for source_record in SourceRecord.objects.filter(pk__in=source_record_ids):
+        if not any(
+            (
+                hasattr(source_record, "external_track"),
+                source_record.externalidentifier_set.exists(),
+                source_record.albumgenreevidence_set.exists(),
+                source_record.relatedartistevidence_set.exists(),
+                source_record.missingalbum_set.exists(),
+            )
+        ):
+            source_record.delete()
+
+    return {
+        "path": root_path,
+        "tracks": track_count,
+        "albums": album_count,
+        "artists": artist_count,
+        "playlists": playlist_count,
+    }
 
 
 def scan_library_root(root, progress_callback=None):

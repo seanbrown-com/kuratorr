@@ -18,8 +18,8 @@ from enrichment.models import (
     Source,
     SourceRecord,
 )
-from library.models import LibraryRoot, ServiceSettings
-from playlists.models import Playlist, PlaylistOutputRoot
+from library.models import LibraryRoot, ServiceSettings, Track
+from playlists.models import Playlist, PlaylistOutputRoot, PlaylistTrack
 from playlists.services import generate_artist_playlists
 
 TEST_STORAGES = {
@@ -185,6 +185,91 @@ def test_library_root_page_adds_selected_directory(client, django_user_model, tm
 
     assert response.status_code == 302
     assert LibraryRoot.objects.filter(path=str(tmp_path), enabled=True).exists()
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_library_root_page_rejects_filesystem_root(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+
+    response = client.post(reverse("root-list"), {"path": "/", "enabled": "on"})
+
+    assert response.status_code == 200
+    assert b"filesystem root cannot be used" in response.content
+    assert not LibraryRoot.objects.filter(path="/").exists()
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_library_root_delete_requires_confirmation_and_removes_associated_records(
+    client, django_user_model, root, track, artist, album
+):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    playlist = Playlist.objects.create(
+        name="Best of Deftones",
+        playlist_type=Playlist.PlaylistType.ARTIST,
+        definition_key="artist:deftones",
+        artist=artist,
+    )
+    PlaylistTrack.objects.create(playlist=playlist, track=track, position=1)
+    client.force_login(user)
+
+    response = client.get(reverse("delete-root", args=[root.pk]))
+    assert response.status_code == 200
+    assert str(root.path).encode() in response.content
+    assert b"I understand this permanently deletes" in response.content
+
+    response = client.post(reverse("delete-root", args=[root.pk]), {})
+    assert response.status_code == 200
+    assert LibraryRoot.objects.filter(pk=root.pk).exists()
+
+    response = client.post(reverse("delete-root", args=[root.pk]), {"confirm": "yes"})
+    assert response.status_code == 302
+    assert not LibraryRoot.objects.filter(pk=root.pk).exists()
+    assert not Track.objects.filter(pk=track.pk).exists()
+    assert not Playlist.objects.filter(pk=playlist.pk).exists()
+    assert not type(album).objects.filter(pk=album.pk).exists()
+    assert not type(artist).objects.filter(pk=artist.pk).exists()
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_library_root_delete_preserves_catalog_records_used_by_another_root(
+    client, django_user_model, root, track, artist, album, tmp_path
+):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    second_path = tmp_path / "second-library"
+    second_path.mkdir()
+    second_root = LibraryRoot.objects.create(path=str(second_path))
+    second_track = Track.objects.create(
+        library_root=second_root,
+        artist=artist,
+        album=album,
+        full_path=str(second_path / "Digital Bath.mp3"),
+        relative_path="Digital Bath.mp3",
+        file_format="mp3",
+        title="Digital Bath",
+        normalized_title="digital bath",
+        year=2000,
+        duration_seconds=240,
+        file_size=100,
+        file_modified_ns=1,
+    )
+    client.force_login(user)
+
+    response = client.post(reverse("delete-root", args=[root.pk]), {"confirm": "yes"})
+
+    assert response.status_code == 302
+    assert Track.objects.filter(pk=second_track.pk).exists()
+    assert type(album).objects.filter(pk=album.pk).exists()
+    assert type(artist).objects.filter(pk=artist.pk).exists()
 
 
 @pytest.mark.django_db

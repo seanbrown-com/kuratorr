@@ -6,12 +6,13 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods, require_POST
 
 from enrichment.job_control import reconcile_stale_jobs
 from enrichment.models import JobRun
 from library.forms import LibraryRootForm
 from library.models import Artist, LibraryRoot, Track
+from library.services import delete_library_root
 from library.tasks import scan_root_task
 
 
@@ -106,6 +107,41 @@ def root_list(request):
         request,
         "library/root_list.html",
         {"roots": LibraryRoot.objects.all(), "form": form, "browser": browser},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def delete_root(request, pk):
+    root = get_object_or_404(LibraryRoot, pk=pk)
+    reconcile_stale_jobs()
+    active_jobs = JobRun.objects.filter(
+        status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING]
+    ).exists()
+    if request.method == "POST":
+        if request.POST.get("confirm") != "yes":
+            messages.error(request, "Confirm the permanent deletion before continuing.")
+        elif active_jobs:
+            messages.error(request, "Cancel or wait for active jobs before removing a library.")
+        else:
+            summary = delete_library_root(root)
+            messages.success(
+                request,
+                f"Removed {summary['path']} and {summary['tracks']} tracks, "
+                f"{summary['albums']} albums, {summary['artists']} artists, and "
+                f"{summary['playlists']} affected playlists.",
+            )
+            return redirect("root-list")
+    return render(
+        request,
+        "library/root_confirm_delete.html",
+        {
+            "root": root,
+            "track_count": root.tracks.count(),
+            "album_count": root.tracks.values("album_id").distinct().count(),
+            "artist_count": root.tracks.values("artist_id").distinct().count(),
+            "active_jobs": active_jobs,
+        },
     )
 
 

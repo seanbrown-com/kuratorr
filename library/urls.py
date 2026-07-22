@@ -8,4 +8,5 @@ urlpatterns = [
     path("artists/<int:pk>/", views.artist_detail, name="artist-detail"),
     path("roots/", views.root_list, name="root-list"),
     path("roots/<int:pk>/scan/", views.scan_root, name="scan-root"),
+    path("roots/<int:pk>/delete/", views.delete_root, name="delete-root"),
 ]

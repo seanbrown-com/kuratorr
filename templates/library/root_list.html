@@ -24,6 +24,6 @@
   </form>
 </section>
 <section class="card"><table><thead><tr><th>Path</th><th>Enabled</th><th>Last scanned</th><th></th></tr></thead><tbody>
-{% for root in roots %}<tr><td><code>{{ root.path }}</code></td><td>{{ root.enabled|yesno:"Yes,No" }}</td><td>{{ root.last_scanned_at|default:"Never" }}</td><td><form method="post" action="{% url 'scan-root' root.pk %}">{% csrf_token %}<button>Scan now</button></form></td></tr>
+{% for root in roots %}<tr><td><code>{{ root.path }}</code></td><td>{{ root.enabled|yesno:"Yes,No" }}</td><td>{{ root.last_scanned_at|default:"Never" }}</td><td><div class="actions"><form method="post" action="{% url 'scan-root' root.pk %}">{% csrf_token %}<button>Scan now</button></form><a class="button danger" href="{% url 'delete-root' root.pk %}">Remove</a></div></td></tr>
 {% empty %}<tr><td colspan="4">No library roots configured.</td></tr>{% endfor %}</tbody></table></section>
 {% endblock %}

@@ -15,4 +15,8 @@ class LibraryRootForm(forms.ModelForm):
         path = Path(self.cleaned_data["path"]).expanduser().resolve()
         if not path.is_dir():
             raise forms.ValidationError("This directory is not accessible to the service.")
+        if path == Path(path.anchor):
+            raise forms.ValidationError(
+                "The filesystem root cannot be used as a library. Choose the directory that contains your music."
+            )
         return str(path)
