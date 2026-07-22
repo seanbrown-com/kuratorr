@@ -16,7 +16,7 @@
 </form>
 <section class="card">
   <table>
-    <thead><tr><th>Artist</th><th>Missing album</th><th>Year</th><th>Release type</th><th>Source</th></tr></thead>
+    <thead><tr><th><a class="sort-header{% if sort_headers.artist.active %} active{% endif %}" href="{{ sort_headers.artist.url }}">Artist{% if sort_headers.artist.active %} <span aria-hidden="true">{{ sort_headers.artist.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.album.active %} active{% endif %}" href="{{ sort_headers.album.url }}">Missing album{% if sort_headers.album.active %} <span aria-hidden="true">{{ sort_headers.album.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.year.active %} active{% endif %}" href="{{ sort_headers.year.url }}">Year{% if sort_headers.year.active %} <span aria-hidden="true">{{ sort_headers.year.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.release_type.active %} active{% endif %}" href="{{ sort_headers.release_type.url }}">Release type{% if sort_headers.release_type.active %} <span aria-hidden="true">{{ sort_headers.release_type.indicator }}</span>{% endif %}</a></th><th>Source</th></tr></thead>
     <tbody>
       {% for album in page %}
       <tr>
@@ -32,5 +32,5 @@
     </tbody>
   </table>
 </section>
-{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?q={{ query|urlencode }}&release_type={{ selected_release_type|urlencode }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?q={{ query|urlencode }}&release_type={{ selected_release_type|urlencode }}&page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?{{ page_query }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{{ page_query }}&page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
 {% endblock %}

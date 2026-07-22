@@ -10,7 +10,7 @@
 </div>
 <section class="card">
   <table>
-    <thead><tr><th>Rank</th><th>Recommended artist</th><th>Linked artists</th><th>Evidence</th><th>Sources</th><th>Connected to</th></tr></thead>
+    <thead><tr><th><a class="sort-header{% if sort_headers.rank.active %} active{% endif %}" href="{{ sort_headers.rank.url }}">Rank{% if sort_headers.rank.active %} <span aria-hidden="true">{{ sort_headers.rank.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.recommended.active %} active{% endif %}" href="{{ sort_headers.recommended.url }}">Recommended artist{% if sort_headers.recommended.active %} <span aria-hidden="true">{{ sort_headers.recommended.indicator }}</span>{% endif %}</a></th><th>Linked artists</th><th>Evidence</th><th>Sources</th><th>Connected to</th></tr></thead>
     <tbody>
       {% for recommendation in page %}
       <tr>
@@ -27,5 +27,5 @@
     </tbody>
   </table>
 </section>
-{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?{{ page_query }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{{ page_query }}&page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
 {% endblock %}

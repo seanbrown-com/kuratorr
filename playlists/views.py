@@ -6,6 +6,7 @@ from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from dashboard.sorting import apply_sorting
 from playlists.models import Playlist
 from playlists.services import (
     _safe_filename,
@@ -23,6 +24,17 @@ def playlist_list(request):
     playlists = Playlist.objects.filter(deleted_at=None)
     if playlist_type:
         playlists = playlists.filter(playlist_type=playlist_type)
+    playlists, sorting = apply_sorting(
+        request,
+        playlists,
+        {
+            "name": "name",
+            "type": "playlist_type",
+            "tracks": "track_count",
+            "duration": "duration_seconds",
+        },
+        "name",
+    )
     return render(
         request,
         "playlists/list.html",
@@ -30,6 +42,7 @@ def playlist_list(request):
             "playlists": playlists,
             "selected_type": playlist_type,
             "types": Playlist.PlaylistType.choices,
+            **sorting,
         },
     )
 

@@ -5,9 +5,11 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
+from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
+from dashboard.sorting import apply_sorting
 from enrichment.job_control import reconcile_stale_jobs
 from enrichment.models import JobRun
 from library.forms import LibraryRootForm
@@ -71,14 +73,28 @@ def artist_list(request):
         Artist.objects.filter(tracks__is_available=True)
         .annotate(
             album_count=Count("albums", distinct=True),
-            track_count=Count("tracks", distinct=True),
+            track_count=Count("tracks", filter=Q(tracks__is_available=True), distinct=True),
         )
         .distinct()
     )
     if query:
         artists = artists.filter(name__icontains=query)
+    artists, sorting = apply_sorting(
+        request,
+        artists,
+        {
+            "artist": Lower("name"),
+            "albums": "album_count",
+            "tracks": "track_count",
+        },
+        "artist",
+    )
     page = Paginator(artists, 100).get_page(request.GET.get("page"))
-    return render(request, "library/artist_list.html", {"page": page, "query": query})
+    return render(
+        request,
+        "library/artist_list.html",
+        {"page": page, "query": query, **sorting},
+    )
 
 
 @login_required

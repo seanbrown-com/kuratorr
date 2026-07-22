@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="heading"><div><h1>Match review</h1><p>Only close, uncertain title matches appear here. Missing and unrelated titles are rejected automatically and retained as source provenance.</p></div></div>
-<div class="tabs">{% for value,label in decisions %}<a class="{% if selected == value %}active{% endif %}" href="?decision={{ value }}">{{ label }}</a>{% endfor %}</div>
-<table><thead><tr><th>Source</th><th>Artist</th><th>External title</th><th>Local match</th><th>Confidence</th><th>Evidence</th><th>Decision</th></tr></thead><tbody>
+<div class="tabs">{% for value,label in decisions %}<a class="{% if selected == value %}active{% endif %}" href="?decision={{ value }}&sort={{ sort|urlencode }}&direction={{ sort_direction|urlencode }}">{{ label }}</a>{% endfor %}</div>
+<table><thead><tr><th><a class="sort-header{% if sort_headers.source.active %} active{% endif %}" href="{{ sort_headers.source.url }}">Source{% if sort_headers.source.active %} <span aria-hidden="true">{{ sort_headers.source.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.artist.active %} active{% endif %}" href="{{ sort_headers.artist.url }}">Artist{% if sort_headers.artist.active %} <span aria-hidden="true">{{ sort_headers.artist.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.external_title.active %} active{% endif %}" href="{{ sort_headers.external_title.url }}">External title{% if sort_headers.external_title.active %} <span aria-hidden="true">{{ sort_headers.external_title.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.local_match.active %} active{% endif %}" href="{{ sort_headers.local_match.url }}">Local match{% if sort_headers.local_match.active %} <span aria-hidden="true">{{ sort_headers.local_match.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.confidence.active %} active{% endif %}" href="{{ sort_headers.confidence.url }}">Confidence{% if sort_headers.confidence.active %} <span aria-hidden="true">{{ sort_headers.confidence.indicator }}</span>{% endif %}</a></th><th>Evidence</th><th>Decision</th></tr></thead><tbody>
 {% for item in page %}<tr>
   <td>{{ item.external_track.source_record.get_source_display }}</td>
   <td>{{ item.artist.name }}</td>
@@ -14,4 +14,5 @@
     <form method="post" action="{% url 'review-evidence' item.pk 'rejected' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button class="danger">Reject</button></form>
   </div></td>
 </tr>{% empty %}<tr><td colspan="7">Nothing in this queue.</td></tr>{% endfor %}</tbody></table>
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?{{ page_query }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{{ page_query }}&page={{ page.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
 {% endblock %}

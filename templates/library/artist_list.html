@@ -2,8 +2,8 @@
 {% block content %}
 <h1>Artists</h1>
 <form class="search" method="get"><input name="q" value="{{ query }}" placeholder="Search artists"><button>Search</button></form>
-<table><thead><tr><th>Artist</th><th>Albums</th><th>Available tracks</th></tr></thead><tbody>
+<table><thead><tr><th><a class="sort-header{% if sort_headers.artist.active %} active{% endif %}" href="{{ sort_headers.artist.url }}">Artist{% if sort_headers.artist.active %} <span aria-hidden="true">{{ sort_headers.artist.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.albums.active %} active{% endif %}" href="{{ sort_headers.albums.url }}">Albums{% if sort_headers.albums.active %} <span aria-hidden="true">{{ sort_headers.albums.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.tracks.active %} active{% endif %}" href="{{ sort_headers.tracks.url }}">Available tracks{% if sort_headers.tracks.active %} <span aria-hidden="true">{{ sort_headers.tracks.indicator }}</span>{% endif %}</a></th></tr></thead><tbody>
 {% for artist in page %}<tr><td><a href="{% url 'artist-detail' artist.pk %}"><strong>{{ artist.name }}</strong></a></td><td>{{ artist.album_count }}</td><td>{{ artist.track_count }}</td></tr>
 {% empty %}<tr><td colspan="3">No artists found.</td></tr>{% endfor %}</tbody></table>
-{% if page.has_other_pages %}<div class="pagination">{% if page.has_previous %}<a href="?q={{ query|urlencode }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?q={{ query|urlencode }}&page={{ page.next_page_number }}">Next</a>{% endif %}</div>{% endif %}
+{% if page.has_other_pages %}<div class="pagination">{% if page.has_previous %}<a href="?{{ page_query }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{{ page_query }}&page={{ page.next_page_number }}">Next</a>{% endif %}</div>{% endif %}
 {% endblock %}

@@ -257,6 +257,8 @@ nav, nav form, .actions { display: flex; align-items: center; gap: 12px; flex-wr
 .tabs a:hover { border-color: var(--color-secondary); color: var(--color-secondary); }
 .tabs a.active { border-color: var(--color-primary); background: var(--color-primary); color: var(--button-text); }
 .tag { display: inline-block; margin: 2px 5px 2px 0; padding: 3px 9px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface-alt); color: var(--color-text-muted); font-size: .75rem; }
+.sort-header { color: inherit; white-space: nowrap; }
+.sort-header:hover, .sort-header.active { color: var(--color-secondary); }
 .pagination { display: flex; justify-content: center; gap: 20px; padding: 22px; color: var(--color-text-muted); }
 .danger-zone { margin-top: 30px; border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-border)); }
 details { max-width: 480px; color: var(--color-danger); font-size: .78rem; }

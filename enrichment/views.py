@@ -2,9 +2,11 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Q
+from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from dashboard.sorting import apply_sorting
 from enrichment.models import (
     ArtistRecommendation,
     Decision,
@@ -19,12 +21,18 @@ from library.models import Artist
 
 @login_required
 def recommendations(request):
-    page = Paginator(ArtistRecommendation.objects.all(), 100).get_page(request.GET.get("page"))
+    recommendations, sorting = apply_sorting(
+        request,
+        ArtistRecommendation.objects.all(),
+        {"rank": "rank", "recommended": Lower("name")},
+        "rank",
+    )
+    page = Paginator(recommendations, 100).get_page(request.GET.get("page"))
     last_job = JobRun.objects.filter(job_type="refresh_recommendations").first()
     return render(
         request,
         "enrichment/recommendations.html",
-        {"page": page, "last_job": last_job},
+        {"page": page, "last_job": last_job, **sorting},
     )
 
 
@@ -45,6 +53,17 @@ def missing_albums(request):
         albums = albums.filter(release_type=release_type)
     else:
         release_type = ""
+    albums, sorting = apply_sorting(
+        request,
+        albums,
+        {
+            "artist": Lower("artist__name"),
+            "album": Lower("title"),
+            "year": "year",
+            "release_type": Lower("release_type"),
+        },
+        "artist",
+    )
     page = Paginator(missing_albums_with_notable_tracks(albums), 100).get_page(
         request.GET.get("page")
     )
@@ -56,6 +75,7 @@ def missing_albums(request):
             "query": query,
             "release_types": release_types,
             "selected_release_type": release_type,
+            **sorting,
         },
     )
 
@@ -70,11 +90,28 @@ def review_queue(request):
         "external_track",
         "external_track__source_record",
     )
+    evidence, sorting = apply_sorting(
+        request,
+        evidence,
+        {
+            "source": "external_track__source_record__source",
+            "artist": Lower("artist__name"),
+            "external_title": Lower("external_track__title"),
+            "local_match": Lower("track__title"),
+            "confidence": "confidence",
+        },
+        "source",
+    )
     page = Paginator(evidence, 100).get_page(request.GET.get("page"))
     return render(
         request,
         "enrichment/review_queue.html",
-        {"page": page, "selected": selected, "decisions": Decision.choices},
+        {
+            "page": page,
+            "selected": selected,
+            "decisions": Decision.choices,
+            **sorting,
+        },
     )
 
 
