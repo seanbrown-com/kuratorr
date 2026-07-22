@@ -49,6 +49,8 @@ class ArtistSourceStatus(TimestampedModel):
     last_attempted_at = models.DateTimeField(null=True, blank=True)
     last_succeeded_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
+    retry_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    consecutive_failures = models.PositiveIntegerField(default=0)
 
     class Meta:
         constraints = [

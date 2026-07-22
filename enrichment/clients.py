@@ -1,6 +1,9 @@
 import os
 import threading
 import time
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from math import ceil
 from urllib.parse import quote
 
 import requests
@@ -19,9 +22,20 @@ class ProviderNotConfigured(ApiError):
     pass
 
 
+class RateLimited(ApiError):
+    def __init__(self, provider, retry_after, message):
+        self.provider = provider
+        self.retry_after = max(int(ceil(retry_after)), 1)
+        super().__init__(message)
+
+
 class BaseClient:
     max_attempts = 4
-    retry_statuses = {429, 500, 502, 503, 504}
+    retry_statuses = {500, 502, 503, 504}
+    provider_name = None
+    cooldown_redis = None
+    cooldown_lock = threading.Lock()
+    local_cooldowns = {}
 
     def __init__(self):
         self.session = requests.Session()
@@ -31,7 +45,81 @@ class BaseClient:
         )
         self.session.headers.update({"User-Agent": user_agent})
 
+    @classmethod
+    def _cooldown_store(cls):
+        if cls.cooldown_redis is None:
+            cls.cooldown_redis = Redis.from_url(
+                settings.CELERY_BROKER_URL,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+                decode_responses=True,
+            )
+        return cls.cooldown_redis
+
+    def _cooldown_key(self):
+        return f"kuratorr:provider-cooldown:{self.provider_name}"
+
+    def _cooldown_remaining(self):
+        if not self.provider_name:
+            return 0
+        now = time.time()
+        with self.cooldown_lock:
+            local_until = self.local_cooldowns.get(self.provider_name, 0)
+        remaining = local_until - now
+        if remaining > 0:
+            return remaining
+        try:
+            remote_until = float(self._cooldown_store().get(self._cooldown_key()) or 0)
+        except (RedisError, TypeError, ValueError):
+            return 0
+        if remote_until > now:
+            with self.cooldown_lock:
+                self.local_cooldowns[self.provider_name] = remote_until
+            return remote_until - now
+        return 0
+
+    def _set_cooldown(self, seconds):
+        if not self.provider_name:
+            return
+        seconds = max(int(ceil(seconds)), 1)
+        until = time.time() + seconds
+        with self.cooldown_lock:
+            self.local_cooldowns[self.provider_name] = until
+        try:
+            self._cooldown_store().set(self._cooldown_key(), until, ex=seconds + 60)
+        except RedisError:
+            pass
+
+    @staticmethod
+    def _retry_after_seconds(response):
+        value = response.headers.get("Retry-After", "").strip()
+        if not value:
+            return None
+        try:
+            return max(float(value), 1)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=UTC)
+                return max((retry_at - datetime.now(UTC)).total_seconds(), 1)
+            except (TypeError, ValueError):
+                return None
+
+    def _rate_limit_delay(self, response):
+        body = response.text.lower()
+        if self.provider_name == "youtube" and "quota" in body and "per day" in body:
+            return 24 * 60 * 60
+        return self._retry_after_seconds(response) or 60
+
     def json(self, method, url, **kwargs):
+        remaining = self._cooldown_remaining()
+        if remaining > 0:
+            raise RateLimited(
+                self.provider_name,
+                remaining,
+                f"{self.provider_name} is cooling down after a rate limit; retry later",
+            )
         for attempt in range(1, self.max_attempts + 1):
             try:
                 response = self.session.request(method, url, timeout=30, **kwargs)
@@ -47,6 +135,14 @@ class BaseClient:
             else:
                 if response.ok:
                     return response.json()
+                if response.status_code == 429:
+                    delay = self._rate_limit_delay(response)
+                    self._set_cooldown(delay)
+                    raise RateLimited(
+                        self.provider_name,
+                        delay,
+                        f"429 from {url}: {response.text[:300]}",
+                    )
                 if response.status_code not in self.retry_statuses or attempt == self.max_attempts:
                     raise ApiError(f"{response.status_code} from {url}: {response.text[:300]}")
                 try:
@@ -58,6 +154,8 @@ class BaseClient:
 
 
 class SpotifyClient(BaseClient):
+    provider_name = "spotify"
+
     def __init__(self):
         super().__init__()
         service_settings = ServiceSettings.load()
@@ -94,6 +192,7 @@ class SpotifyClient(BaseClient):
 
 class LastFmClient(BaseClient):
     endpoint = "https://ws.audioscrobbler.com/2.0/"
+    provider_name = "lastfm"
 
     def __init__(self):
         super().__init__()
@@ -134,6 +233,7 @@ class LastFmClient(BaseClient):
 
 class MusicBrainzClient(BaseClient):
     endpoint = "https://musicbrainz.org/ws/2"
+    provider_name = "musicbrainz"
     request_lock = threading.Lock()
     last_request_at = 0.0
     rate_redis = None
@@ -234,6 +334,7 @@ class MusicBrainzClient(BaseClient):
 
 class WikipediaClient(BaseClient):
     endpoint = "https://en.wikipedia.org/w/api.php"
+    provider_name = "wikipedia"
 
     def find_page(self, artist):
         data = self.json(
@@ -267,6 +368,7 @@ class WikipediaClient(BaseClient):
 
 class YouTubeClient(BaseClient):
     endpoint = "https://www.googleapis.com/youtube/v3"
+    provider_name = "youtube"
 
     def __init__(self):
         super().__init__()

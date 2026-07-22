@@ -5,7 +5,12 @@ import pytest
 import requests
 from django.utils import timezone
 
-from enrichment.clients import BaseClient, MusicBrainzClient, ProviderNotConfigured
+from enrichment.clients import (
+    BaseClient,
+    MusicBrainzClient,
+    ProviderNotConfigured,
+    RateLimited,
+)
 from enrichment.models import (
     ArtistRecommendation,
     Decision,
@@ -24,8 +29,8 @@ from enrichment.services import (
     _wikipedia_infobox,
     _youtube_confidence,
     _youtube_title,
-    enrich_spotify,
     enrich_musicbrainz,
+    enrich_spotify,
     enrich_wikipedia,
     refresh_artist_recommendations,
     refresh_noteworthy_decisions,
@@ -60,9 +65,7 @@ def test_track_match_rejects_unrelated_partial_substring(track, artist):
 
 @pytest.mark.django_db
 def test_track_match_sends_only_close_titles_to_review(track, artist):
-    matched, confidence, decision = _match_local_track(
-        artist, "Change in the House of Flys"
-    )
+    matched, confidence, decision = _match_local_track(artist, "Change in the House of Flys")
 
     assert matched == track
     assert Decimal("0.85") <= confidence < Decimal("0.95")
@@ -218,10 +221,18 @@ def test_musicbrainz_catalog_records_only_missing_albums(artist, album, monkeypa
 def test_youtube_requires_explicit_official_music_video_and_artist_channel():
     artist = type("Artist", (), {"name": "Team Sleep"})()
     plain_upload = {
-        "snippet": {"title": "Team Sleep - Blvd. Nights", "description": "", "channelTitle": "Team Sleep"}
+        "snippet": {
+            "title": "Team Sleep - Blvd. Nights",
+            "description": "",
+            "channelTitle": "Team Sleep",
+        }
     }
     official = {
-        "snippet": {"title": "Team Sleep - Blvd. Nights (Official Music Video)", "description": "", "channelTitle": "Team Sleep"}
+        "snippet": {
+            "title": "Team Sleep - Blvd. Nights (Official Music Video)",
+            "description": "",
+            "channelTitle": "Team Sleep",
+        }
     }
     assert _youtube_confidence(plain_upload, artist) == 0
     assert _youtube_confidence(official, artist) == Decimal("0.95")
@@ -297,10 +308,20 @@ def test_noteworthy_union_uses_top_two_per_popularity_source_and_wikipedia_singl
             decision=Decision.ACCEPTED,
         )
 
-    for rank, title in enumerate(["No One Loves Me", "New Fang", "Dead End Friends", "Scumbag Blues"], 1):
+    for rank, title in enumerate(
+        ["No One Loves Me", "New Fang", "Dead End Friends", "Scumbag Blues"], 1
+    ):
         evidence(Source.SPOTIFY, NoteworthyEvidence.EvidenceType.SPOTIFY_TOP, title, rank=rank)
-    for rank, title in enumerate(["New Fang", "Dead End Friends", "Scumbag Blues", "No One Loves Me"], 1):
-        evidence(Source.LASTFM, NoteworthyEvidence.EvidenceType.LASTFM_TOP, title, rank=rank, playcount=10000)
+    for rank, title in enumerate(
+        ["New Fang", "Dead End Friends", "Scumbag Blues", "No One Loves Me"], 1
+    ):
+        evidence(
+            Source.LASTFM,
+            NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+            title,
+            rank=rank,
+            playcount=10000,
+        )
     evidence(Source.WIKIPEDIA, NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE, "Mind Eraser")
 
     refresh_noteworthy_decisions(artist)
@@ -503,6 +524,53 @@ def test_api_client_retries_transient_tls_failures(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_api_client_opens_shared_cooldown_for_youtube_daily_quota(monkeypatch):
+    class FakeRedis:
+        values = {}
+
+        def get(self, name):
+            return self.values.get(name)
+
+        def set(self, name, value, ex):
+            self.values[name] = value
+
+    class QuotaResponse:
+        ok = False
+        status_code = 429
+        headers = {}
+        text = "Quota exceeded for quota metric 'Search Queries per day'"
+
+    calls = []
+    BaseClient.cooldown_redis = FakeRedis()
+    BaseClient.local_cooldowns.clear()
+    client = BaseClient()
+    client.provider_name = "youtube"
+    monkeypatch.setattr(
+        client.session,
+        "request",
+        lambda *args, **kwargs: calls.append(args) or QuotaResponse(),
+    )
+
+    with pytest.raises(RateLimited) as first_error:
+        client.json("GET", "https://youtube.test/search")
+    assert first_error.value.retry_after == 24 * 60 * 60
+    assert len(calls) == 1
+
+    second_client = BaseClient()
+    second_client.provider_name = "youtube"
+    monkeypatch.setattr(
+        second_client.session,
+        "request",
+        lambda *args, **kwargs: pytest.fail("cooldown should prevent another API request"),
+    )
+    with pytest.raises(RateLimited):
+        second_client.json("GET", "https://youtube.test/search")
+
+    BaseClient.cooldown_redis = None
+    BaseClient.local_cooldowns.clear()
+
+
+@pytest.mark.django_db
 def test_musicbrainz_rate_limit_uses_shared_redis_lock(monkeypatch):
     events = []
 
@@ -583,3 +651,43 @@ def test_pending_enrichment_retries_stale_musicbrainz_failures(artist, monkeypat
     queued.clear()
     assert run_pending_enrichments() == 0
     assert queued == []
+
+
+@pytest.mark.django_db
+def test_rate_limited_source_is_deferred_until_retry_time(artist, monkeypatch):
+    from enrichment.models import ArtistSourceStatus
+    from enrichment.tasks import (
+        ENRICHERS,
+        enrich_artist,
+        enrich_artist_task,
+        run_pending_enrichments,
+    )
+
+    def quota_exhausted(current_artist):
+        raise RateLimited("youtube", 24 * 60 * 60, "YouTube daily quota exhausted")
+
+    monkeypatch.setitem(ENRICHERS, "youtube", quota_exhausted)
+    result = enrich_artist(artist, "youtube")
+    status = artist.source_statuses.get(source=Source.YOUTUBE)
+
+    assert result["youtube"]["rate_limited"] is True
+    assert result["youtube"]["retry_after_seconds"] == 24 * 60 * 60
+    assert status.consecutive_failures == 1
+    assert status.retry_at > timezone.now() + timedelta(hours=23)
+
+    for source in (Source.MUSICBRAINZ, Source.SPOTIFY, Source.LASTFM, Source.WIKIPEDIA):
+        ArtistSourceStatus.objects.create(artist=artist, source=source)
+
+    queued = []
+    monkeypatch.setattr(
+        enrich_artist_task,
+        "delay",
+        lambda artist_id, source=None, job_id=None: queued.append((artist_id, source)),
+    )
+    assert run_pending_enrichments() == 0
+    assert queued == []
+
+    status.retry_at = timezone.now() - timedelta(seconds=1)
+    status.save(update_fields=["retry_at"])
+    assert run_pending_enrichments() == 1
+    assert queued == [(artist.pk, Source.YOUTUBE)]

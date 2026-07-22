@@ -76,10 +76,13 @@ back to the browser. Existing environment variables remain supported as fallback
 
 MusicBrainz and Wikipedia do not require credentials. MusicBrainz requires a
 meaningful, contactable HTTP User-Agent and limits clients to approximately one
-request per second. Transient TLS, timeout, rate-limit, and server failures are
-retried with backoff. A source without credentials is recorded as skipped rather
-than failing the artist job; saving new credentials makes that source eligible for
-automatic enrichment again.
+request per second. Transient TLS, timeout, and server failures use bounded
+backoff. A 429 opens a shared Redis-backed provider cooldown and stores an
+exponentially delayed retry time for that artist/source; YouTube daily-quota
+exhaustion pauses YouTube requests for 24 hours. Celery Beat requeues only eligible
+work in bounded batches. A source without credentials is recorded as skipped
+rather than failing the artist job; saving new credentials makes that source
+eligible for automatic enrichment again.
 
 ## Processing flow
 
@@ -129,10 +132,10 @@ Run verification:
 The installer expects a fresh Debian 13 container with working DNS, a domain pointing to it, ports 80/443 forwarded, and the audio library mounted into the LXC. Run as root:
 
 ```bash
-./scripts/install-lxc.sh GIT_REPOSITORY_URL music.example.com admin@example.com
+./scripts/install-lxc.sh music.example.com admin@example.com
 ```
 
-It installs PostgreSQL, Redis, Nginx, Python, Gunicorn, Celery, systemd services, and optional Let's Encrypt; generates database, Django, and one-time setup secrets; runs migrations/static collection; and prints the setup token. Add API credentials on the Settings page (or use environment fallbacks), make mounted paths readable by `kuratorr`, make output paths writable, and restart the three application services after environment changes.
+The script clones `https://github.com/seanbrown-com/kuratorr.git` automatically. It installs PostgreSQL, Redis, Nginx, Python, Gunicorn, Celery, and systemd services; generates database, Django, and one-time setup secrets; runs migrations/static collection; and prints the setup token. Supplying an email enables automatic Let's Encrypt HTTPS; omitting it creates an HTTP installation suitable for a trusted LAN. Add API credentials on the Settings page (or use environment fallbacks), make mounted paths readable by `kuratorr`, make output paths writable, and restart the three application services after environment changes.
 
 Update an installed service as root:
 

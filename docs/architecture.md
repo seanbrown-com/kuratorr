@@ -5,7 +5,7 @@
 - **Django/Gunicorn:** authenticated operator UI, configuration, review, and exports.
 - **PostgreSQL:** canonical library entities, source observations, job history, review state, and playlist snapshots.
 - **Redis/Celery:** durable asynchronous scans, enrichment, playlist generation, and scheduled continuation.
-- **Celery Beat:** periodically queues a bounded number of artists whose configured sources have not yet been attempted and safely retries stale MusicBrainz transport failures.
+- **Celery Beat:** periodically queues a bounded number of artists whose configured sources have not yet been attempted and requeues failed provider work only after its stored retry time.
 - **Nginx:** public TLS termination, static files, proxy headers, and request-size limits.
 
 ## Data boundaries
@@ -40,7 +40,7 @@ Jobs progress through queued, running, succeeded, failed, or cancelled states. A
 
 Celery tasks are idempotent at their database boundaries: local files use `update_or_create`, source records use source/kind/external-ID uniqueness, evidence has source-specific uniqueness, and playlists use stable definition keys.
 
-The continuation task retries up to five MusicBrainz failures per cycle after a 15-minute cooling-off period. This prevents duplicate jobs while a slow request is still running and lets transient TLS or throttling failures recover without manual intervention.
+External clients use a Redis-backed provider circuit breaker. A 429 response prevents every worker from calling that provider again during the cooldown, honors `Retry-After` when supplied, and applies persistent exponential backoff per artist/source. YouTube daily-quota exhaustion opens a 24-hour cooldown. The continuation task requeues no more than five eligible failed sources per five-minute cycle and leases each queued retry for 15 minutes to prevent duplicate dispatch.
 
 ## Playlist semantics
 

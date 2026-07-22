@@ -4,7 +4,7 @@ from celery import shared_task
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from enrichment.clients import ProviderNotConfigured
+from enrichment.clients import ProviderNotConfigured, RateLimited
 from enrichment.models import ArtistSourceStatus, JobRun
 from enrichment.services import (
     enrich_lastfm,
@@ -37,10 +37,28 @@ def enrich_artist(artist, source=None):
             result[name] = callback(artist)
             status.last_succeeded_at = timezone.now()
             status.last_error = ""
+            status.retry_at = None
+            status.consecutive_failures = 0
         except ProviderNotConfigured as exc:
             result[name] = {"skipped": str(exc)}
             status.last_error = ""
+            status.retry_at = None
+            status.consecutive_failures = 0
+        except RateLimited as exc:
+            status.consecutive_failures += 1
+            exponential_delay = min(60 * (2 ** (status.consecutive_failures - 1)), 6 * 60 * 60)
+            retry_after = max(exc.retry_after, exponential_delay)
+            status.retry_at = timezone.now() + timedelta(seconds=retry_after)
+            status.last_error = str(exc)
+            result[name] = {
+                "error": str(exc),
+                "rate_limited": True,
+                "retry_after_seconds": retry_after,
+            }
         except Exception as exc:
+            status.consecutive_failures += 1
+            retry_after = min(15 * 60 * (2 ** (status.consecutive_failures - 1)), 24 * 60 * 60)
+            status.retry_at = timezone.now() + timedelta(seconds=retry_after)
             result[name] = {"error": str(exc)}
             status.last_error = str(exc)
         status.save()
@@ -115,18 +133,25 @@ def enrich_library_task(self, job_id=None):
 
 @shared_task
 def run_pending_enrichments():
+    now = timezone.now()
     retry_before = timezone.now() - timedelta(minutes=15)
-    failed_musicbrainz = list(
-        ArtistSourceStatus.objects.filter(source="musicbrainz")
-        .exclude(last_error="")
-        .filter(Q(last_attempted_at__isnull=True) | Q(last_attempted_at__lt=retry_before))
+    failed_sources = list(
+        ArtistSourceStatus.objects.exclude(last_error="")
+        .filter(
+            Q(retry_at__lte=now)
+            | Q(retry_at__isnull=True, last_attempted_at__isnull=True)
+            | Q(retry_at__isnull=True, last_attempted_at__lt=retry_before)
+        )
         .select_related("artist")
-        .order_by("last_attempted_at")[:5]
+        .order_by("retry_at", "last_attempted_at")[:5]
     )
-    if failed_musicbrainz:
-        for status in failed_musicbrainz:
+    if failed_sources:
+        lease_until = now + timedelta(minutes=15)
+        for status in failed_sources:
+            status.retry_at = lease_until
+            status.save(update_fields=["retry_at", "updated_at"])
             enrich_artist_task.delay(status.artist_id, status.source)
-        return len(failed_musicbrainz)
+        return len(failed_sources)
 
     pending = Artist.objects.annotate(source_count=Count("source_statuses")).filter(
         source_count__lt=len(ENRICHERS)

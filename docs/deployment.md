@@ -10,9 +10,21 @@
 
 ## Install
 
-Run `scripts/install-lxc.sh REPO_URL DOMAIN [LETSENCRYPT_EMAIL]` as root. Without an email, the installer configures HTTP and leaves certificate provisioning to the administrator. For an internet-facing service, provide the email and verify automatic HTTPS before creating the administrator.
+Run `scripts/install-lxc.sh DOMAIN_OR_IP [LETSENCRYPT_EMAIL]` as root. The installer clones the official repository from `https://github.com/seanbrown-com/kuratorr.git`; set `KURATORR_REPO_URL` only to install a fork or use an authenticated clone URL.
 
-The application lives at `/opt/kuratorr`; infrastructure secrets live in its mode-0600 `.env`; systemd runs all application processes as `kuratorr`. Provider credentials may be entered in the Settings UI and are encrypted in PostgreSQL using a key derived from `DJANGO_SECRET_KEY`. Back up the database and `.env` together; neither is sufficient to recover those credentials alone. Never commit `.env`.
+The first argument tells Django and Nginx which hostname or IP address will receive requests. With no email, the installer creates a LAN-friendly HTTP deployment and does not enable secure cookies, HTTPS redirects, or HSTS. For an internet-facing deployment, point a DNS hostname at the service and provide the optional email. Certbot then requests a Let's Encrypt certificate, updates Nginx for HTTPS, and the installer enables the corresponding Django security settings.
+
+Examples:
+
+```bash
+# Internet-facing HTTPS installation
+./scripts/install-lxc.sh kuratorr.example.com admin@example.com
+
+# LAN-only HTTP installation by IP address
+./scripts/install-lxc.sh 192.168.1.50
+```
+
+The application lives at `/opt/kuratorr`; infrastructure secrets live in its mode-0600 `.env`; systemd runs all application processes as `kuratorr`. The installer generates `en_US.UTF-8` and explicitly creates the PostgreSQL database with UTF-8 encoding so enrichment data can safely contain international text and punctuation. Provider credentials may be entered in the Settings UI and are encrypted in PostgreSQL using a key derived from `DJANGO_SECRET_KEY`. Back up the database and `.env` together; neither is sufficient to recover those credentials alone. Never commit `.env`.
 
 ## Mount permissions
 
