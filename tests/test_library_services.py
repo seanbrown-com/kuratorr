@@ -2,7 +2,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings
 
+from enrichment.job_control import fail_job_for_task
 from enrichment.models import JobRun
 from library.models import AlbumGenre, ScanIssue, Track
 from library.services import (
@@ -75,6 +77,44 @@ def test_scan_records_bad_file(root, tmp_path):
     summary = scan_library_root(root)
     assert summary["errors"] == 1
     assert ScanIssue.objects.filter(full_path=str(path), resolved_at=None).exists()
+
+
+@pytest.mark.django_db
+def test_scan_reports_current_file_before_processing(root):
+    path = Path(root.path) / "track.mp3"
+    path.write_bytes(b"fake")
+    progress = []
+
+    with patch("library.services.import_file", return_value=(object(), True)):
+        scan_library_root(root, progress_callback=lambda *values: progress.append(values))
+
+    assert progress[0] == (0, 1, str(path))
+    assert progress[-1] == (1, 1, "")
+
+
+@pytest.mark.django_db
+def test_celery_failure_marks_job_failed_and_keeps_current_item():
+    job = JobRun.objects.create(
+        job_type="scan_library",
+        status=JobRun.Status.RUNNING,
+        celery_task_id="scan-task",
+        current_item="/music/problem.flac",
+    )
+
+    assert fail_job_for_task("scan-task", "Celery hard time limit exceeded") == 1
+
+    job.refresh_from_db()
+    assert job.status == JobRun.Status.FAILED
+    assert job.finished_at is not None
+    assert job.current_item == "/music/problem.flac"
+    assert "hard time limit" in job.error
+
+
+def test_scan_task_has_long_running_limits():
+    from library.tasks import scan_root_task
+
+    assert scan_root_task.time_limit == settings.SCAN_TASK_TIME_LIMIT == 86400
+    assert scan_root_task.soft_time_limit == settings.SCAN_TASK_SOFT_TIME_LIMIT == 82800
 
 
 @pytest.mark.django_db

@@ -36,7 +36,7 @@ Scans recurse only into `.mp3` and `.flac` files. Unchanged size and nanosecond 
 
 ## Job semantics
 
-Jobs progress through queued, running, succeeded, failed, or cancelled states. A library scan reads only local files and reports per-file progress; it never starts enrichment. Manual full-library enrichment fans out one child job per available artist, and each terminal child atomically advances the parent’s progress. The parent completes successfully only when every child succeeds. Job History can cooperatively cancel queued/running parents and children, and running jobs without a heartbeat for an hour are marked failed rather than remaining stale indefinitely.
+Jobs progress through queued, running, succeeded, failed, or cancelled states. A library scan reads only local files and reports per-file progress; it records the next file path before opening it and never starts enrichment. Scan tasks have independent long-running limits so provider task limits cannot interrupt a large collection. Manual full-library enrichment fans out one child job per available artist, and each terminal child atomically advances the parent’s progress. The parent completes successfully only when every child succeeds. Job History can cooperatively cancel queued/running parents and children. Celery failure signals mark externally terminated tasks failed, while running jobs without a heartbeat for 15 minutes are reconciled as failed as a fallback.
 
 Celery tasks are idempotent at their database boundaries: local files use `update_or_create`, source records use source/kind/external-ID uniqueness, evidence has source-specific uniqueness, and playlists use stable definition keys.
 

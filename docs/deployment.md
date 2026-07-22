@@ -65,9 +65,16 @@ This recreates PostgreSQL with UTF-8 encoding and applies every migration. It
 permanently deletes users, application settings, library roots, tracks,
 enrichment data, jobs, and playlists. `/opt/kuratorr/.env` is not changed, so
 environment-based API credentials and service configuration are retained.
+Queued Celery work is purged from Redis before the database is recreated, so
+tasks cannot resume with identifiers from the deleted catalog.
 Return to Kuratorr afterward to create the sole admin account again, restore the
 Settings and library root, and run **Configure and Scan**. Enrichment remains a
 separate manual step.
+
+Library scans have a separate 24-hour hard limit and 23-hour soft limit by
+default. Override these in `.env` with `SCAN_TASK_TIME_LIMIT` and
+`SCAN_TASK_SOFT_TIME_LIMIT`, expressed in seconds. The soft limit must be lower
+than the hard limit. Other Celery jobs retain the shorter global limits.
 
 ## Security checklist
 

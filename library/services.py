@@ -284,9 +284,9 @@ def scan_library_root(root, progress_callback=None):
     ]
     seen = []
     summary = {"found": 0, "created": 0, "updated_or_unchanged": 0, "errors": 0}
-    if progress_callback:
-        progress_callback(0, len(files))
     for index, path in enumerate(files, 1):
+        if progress_callback:
+            progress_callback(index - 1, len(files), str(path))
         summary["found"] += 1
         seen.append(str(path))
         try:
@@ -299,8 +299,8 @@ def scan_library_root(root, progress_callback=None):
                 full_path=str(path),
                 defaults={"error": str(exc), "resolved_at": None},
             )
-        if progress_callback:
-            progress_callback(index, len(files))
+    if progress_callback:
+        progress_callback(len(files), len(files), "")
     Track.objects.filter(library_root=root).exclude(full_path__in=seen).update(is_available=False)
     root.last_scanned_at = timezone.now()
     root.save(update_fields=["last_scanned_at", "updated_at"])

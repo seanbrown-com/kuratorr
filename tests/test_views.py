@@ -306,6 +306,7 @@ def test_job_history_lists_and_filters_all_jobs(client, django_user_model):
         job_type="enrich_musicbrainz",
         status=JobRun.Status.FAILED,
         error="temporary TLS failure",
+        current_item="/music/current.flac",
         requested_manually=False,
     )
     JobRun.objects.create(
@@ -320,7 +321,15 @@ def test_job_history_lists_and_filters_all_jobs(client, django_user_model):
     body = response.content.decode()
 
     assert response.status_code == 200
-    assert all(value in body for value in ("Jobs", "enrich_musicbrainz", "temporary TLS failure"))
+    assert all(
+        value in body
+        for value in (
+            "Jobs",
+            "enrich_musicbrainz",
+            "temporary TLS failure",
+            "/music/current.flac",
+        )
+    )
     assert "<strong>generate_playlists</strong>" not in body
     assert 'href="/jobs/"' in body
 

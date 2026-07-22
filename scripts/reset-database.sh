@@ -44,6 +44,10 @@ restart_services() {
 }
 trap restart_services EXIT
 
+echo "Purging queued Celery tasks from Redis..."
+runuser -u "$APP_USER" -- env PYTHONPATH="$APP_DIR" \
+  "$APP_DIR/.venv/bin/celery" -A config purge --force
+
 echo "Terminating open database sessions..."
 runuser -u postgres -- psql --dbname=postgres --set=ON_ERROR_STOP=1 --command \
   "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();"

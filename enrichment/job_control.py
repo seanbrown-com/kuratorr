@@ -25,12 +25,14 @@ def start_job(job, task_id=""):
     job.save()
 
 
-def touch_job(job_id, *, current=None, total=None):
+def touch_job(job_id, *, current=None, total=None, current_item=None):
     values = {"heartbeat_at": timezone.now(), "updated_at": timezone.now()}
     if current is not None:
         values["progress_current"] = current
     if total is not None:
         values["progress_total"] = total
+    if current_item is not None:
+        values["current_item"] = current_item
     updated = JobRun.objects.filter(pk=job_id, status=JobRun.Status.RUNNING).update(**values)
     if not updated:
         raise JobCancelled("Job is no longer running.")
@@ -47,10 +49,29 @@ def finish_job(job, status, *, summary=None, error=""):
     if summary is not None:
         job.summary = summary
     job.error = error
+    if status == JobRun.Status.SUCCEEDED:
+        job.current_item = ""
     job.save()
 
 
-def reconcile_stale_jobs(max_silence=timedelta(hours=1)):
+def fail_job_for_task(task_id, error):
+    """Record failures raised by Celery outside the task process itself."""
+    if not task_id:
+        return 0
+    now = timezone.now()
+    return JobRun.objects.filter(
+        celery_task_id=task_id,
+        status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING],
+    ).update(
+        status=JobRun.Status.FAILED,
+        finished_at=now,
+        heartbeat_at=now,
+        error=str(error)[:10000],
+        updated_at=now,
+    )
+
+
+def reconcile_stale_jobs(max_silence=timedelta(minutes=15)):
     now = timezone.now()
     stale_before = now - max_silence
     stale = JobRun.objects.filter(status=JobRun.Status.RUNNING).filter(

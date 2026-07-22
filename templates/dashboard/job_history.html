@@ -45,9 +45,10 @@
         <td>{{ job.finished_at|default:"—" }}</td>
         <td>
           {% if job.error %}<details><summary>Error</summary><pre>{{ job.error }}</pre></details>{% endif %}
+          {% if job.current_item %}<details open><summary>Current item</summary><code>{{ job.current_item }}</code></details>{% endif %}
           {% if job.summary %}<details><summary>Summary</summary><pre>{{ job.summary }}</pre></details>{% endif %}
           {% if job.celery_task_id %}<details><summary>Task ID</summary><code>{{ job.celery_task_id }}</code></details>{% endif %}
-          {% if not job.error and not job.summary and not job.celery_task_id %}—{% endif %}
+          {% if not job.error and not job.current_item and not job.summary and not job.celery_task_id %}—{% endif %}
         </td>
         <td>
           {% if job.status == "queued" or job.status == "running" %}

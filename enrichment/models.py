@@ -44,6 +44,7 @@ class JobRun(TimestampedModel):
     heartbeat_at = models.DateTimeField(null=True, blank=True, db_index=True)
     progress_current = models.PositiveIntegerField(default=0)
     progress_total = models.PositiveIntegerField(default=0)
+    current_item = models.CharField(max_length=4096, blank=True)
     summary = models.JSONField(default=dict)
     error = models.TextField(blank=True)
 
