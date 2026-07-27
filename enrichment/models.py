@@ -136,6 +136,7 @@ class NoteworthyEvidence(TimestampedModel):
     class EvidenceType(models.TextChoices):
         SPOTIFY_TOP = "spotify_top", "Spotify top track"
         LASTFM_TOP = "lastfm_top", "Last.fm top track"
+        MUSICBRAINZ_SINGLE = "musicbrainz_single", "MusicBrainz single"
         WIKIPEDIA_SINGLE = "wikipedia_single", "Wikipedia single"
         WIKIPEDIA_VIDEO = "wikipedia_video", "Wikipedia music video"
         YOUTUBE_OFFICIAL = "youtube_official", "YouTube official music video"

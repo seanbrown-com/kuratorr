@@ -133,17 +133,37 @@ def _best_album_candidate(artist, album, candidates):
     return max(scored, key=lambda item: item[0]) if scored else (Decimal("0"), None)
 
 
-def _match_local_track(artist, title, *, settings=None, tracks=None):
+def _match_local_track(
+    artist,
+    title,
+    *,
+    year=None,
+    album_title="",
+    settings=None,
+    tracks=None,
+):
     settings = settings or ServiceSettings.load()
     tracks = tracks if tracks is not None else artist.tracks.filter(is_available=True)
+    if hasattr(tracks, "select_related"):
+        tracks = tracks.select_related("album")
     scored = sorted(
-        ((_title_score(title, track.title), track) for track in tracks),
-        key=lambda x: x[0],
+        (
+            (
+                _title_score(title, track.title),
+                _title_score(album_title, track.album.title) if album_title else Decimal("0"),
+                -abs((track.year or track.album.year) - year)
+                if year and (track.year or track.album.year)
+                else -9999,
+                track,
+            )
+            for track in tracks
+        ),
+        key=lambda x: (x[0], x[1], x[2]),
         reverse=True,
     )
     if not scored:
         return None, Decimal("0"), Decision.REJECTED
-    confidence, track = scored[0]
+    confidence, _, _, track = scored[0]
     if confidence >= settings.track_match_auto_accept_threshold:
         return track, confidence, Decision.ACCEPTED
     if confidence >= settings.track_match_review_threshold:
@@ -152,7 +172,12 @@ def _match_local_track(artist, title, *, settings=None, tracks=None):
 
 
 def _external_track(source, record, artist, title, evidence_type, **data):
-    matched, confidence, decision = _match_local_track(artist, title)
+    matched, confidence, decision = _match_local_track(
+        artist,
+        title,
+        year=data.get("year"),
+        album_title=data.get("album_title", ""),
+    )
     source_confidence = Decimal(str(data.get("source_confidence", 1)))
     evidence_confidence = min(confidence, source_confidence)
     evidence_decision = (
@@ -385,10 +410,35 @@ def enrich_musicbrainz(artist):
         },
     )
     matched_albums = 0
+    single_count = 0
+    NoteworthyEvidence.objects.filter(
+        artist=artist,
+        evidence_type=NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE,
+    ).delete()
     MissingAlbum.objects.filter(artist=artist, source=Source.MUSICBRAINZ).delete()
     for release in client.release_groups(mbid):
         release_title = release.get("title", "").strip()
         if not release_title:
+            continue
+        release_record = _record(
+            Source.MUSICBRAINZ,
+            "release_group",
+            release["id"],
+            release,
+            f"https://musicbrainz.org/release-group/{release['id']}",
+        )
+        if release.get("primary-type") == "Single":
+            _external_track(
+                Source.MUSICBRAINZ,
+                release_record,
+                artist,
+                release_title,
+                NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE,
+                year=_year(release.get("first-release-date")),
+                source_confidence=confidence,
+                notes="Official MusicBrainz release group classified as a Single.",
+            )
+            single_count += 1
             continue
         albums = Album.objects.filter(artist=artist)
         scored = sorted(
@@ -397,13 +447,6 @@ def enrich_musicbrainz(artist):
             reverse=True,
         )
         album = scored[0][1] if scored and scored[0][0] >= Decimal("0.82") else None
-        release_record = _record(
-            Source.MUSICBRAINZ,
-            "release_group",
-            release["id"],
-            release,
-            f"https://musicbrainz.org/release-group/{release['id']}",
-        )
         if not album:
             if release.get("primary-type") == "Album":
                 secondary_types = release.get("secondary-types") or []
@@ -483,7 +526,54 @@ def enrich_musicbrainz(artist):
                 "decision": Decision.ACCEPTED if related else Decision.PENDING,
             },
         )
-    return {"albums": matched_albums}
+    return {"albums": matched_albums, "singles": single_count}
+
+
+def _expanded_table_rows(table):
+    """Expand row/column spans so discography columns retain their meaning."""
+    carried = {}
+    expanded = []
+    rows = table.find_all("tr", recursive=False)
+    if not rows:
+        rows = [
+            row
+            for section in table.find_all(["thead", "tbody", "tfoot"], recursive=False)
+            for row in section.find_all("tr", recursive=False)
+        ]
+    for row in rows:
+        cells = row.find_all(["td", "th"], recursive=False)
+        grid = []
+        next_carried = {}
+        column = 0
+
+        def append_carried(index):
+            cell, remaining = carried[index]
+            grid.append(cell)
+            if remaining > 1:
+                next_carried[index] = (cell, remaining - 1)
+
+        for cell in cells:
+            while column in carried:
+                append_carried(column)
+                column += 1
+            colspan = max(int(cell.get("colspan", 1) or 1), 1)
+            rowspan = max(int(cell.get("rowspan", 1) or 1), 1)
+            for _ in range(colspan):
+                grid.append(cell)
+                if rowspan > 1:
+                    next_carried[column] = (cell, rowspan - 1)
+                column += 1
+        if carried:
+            final_column = max(carried)
+            while column <= final_column:
+                if column in carried:
+                    append_carried(column)
+                else:
+                    grid.append(None)
+                column += 1
+        carried = next_carried
+        expanded.append(grid)
+    return expanded
 
 
 def _section_candidates(html):
@@ -497,51 +587,83 @@ def _section_candidates(html):
                 kind = NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE
             elif "music video" in heading or "videography" in heading:
                 kind = NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO
-            elif element.name in {"h2", "h3"}:
+            elif element.name == "h2":
                 kind = None
             continue
         if not kind:
             continue
+        if element.find_parent("table"):
+            # Certification lists and layout tables nested inside a discography
+            # table are metadata, not additional song lists.
+            continue
         if element.name == "table":
             title_index = None
-            header_width = 0
-            rows = element.find_all("tr")
-            for row in rows:
-                cells = row.find_all(["td", "th"], recursive=False)
-                labels = [normalize_text(cell.get_text(" ", strip=True)) for cell in cells]
-                index = next(
-                    (i for i, label in enumerate(labels) if label in {"title", "single", "song"}),
-                    None,
-                )
-                if index is not None:
-                    title_index = index
-                    header_width = len(cells)
-                    break
-            current_year = None
-            for row in rows:
-                cells = row.find_all(["td", "th"], recursive=False)
-                labels = [normalize_text(cell.get_text(" ", strip=True)) for cell in cells]
-                if any(label in {"title", "single", "song"} for label in labels):
-                    continue
-                year = _year(row.get_text(" ", strip=True))
-                current_year = year or current_year
-                # Rowspans commonly omit a leading Year cell on subsequent singles.
-                missing_leading_cells = max(0, header_width - len(cells))
-                row_title_index = (
-                    max(0, title_index - missing_leading_cells) if title_index is not None else None
-                )
-                if row_title_index is not None and row_title_index < len(cells):
-                    cell = cells[row_title_index]
-                    raw_title = _wikipedia_node_text(cell)
-                    quoted = re.search(r'["“](.*?)["”]', raw_title)
-                    anchor = _wikipedia_title_anchor(cell)
-                    title = _clean_wikipedia_title(
-                        quoted.group(1)
-                        if quoted
-                        else (anchor.get_text(" ", strip=True) if anchor else raw_title)
+            year_index = None
+            album_index = None
+            rows = _expanded_table_rows(element)
+            for cells in rows:
+                labels = [
+                    normalize_text(cell.get_text(" ", strip=True)) if cell else "" for cell in cells
+                ]
+                if title_index is None:
+                    title_index = next(
+                        (
+                            i
+                            for i, label in enumerate(labels)
+                            if label in {"title", "track", "single", "song"}
+                        ),
+                        None,
                     )
-                    if title and normalize_text(title) not in {"title", "single", "song"}:
-                        output.append((kind, title, current_year))
+                if year_index is None:
+                    year_index = next(
+                        (i for i, label in enumerate(labels) if label == "year"),
+                        None,
+                    )
+                if album_index is None:
+                    album_index = next(
+                        (i for i, label in enumerate(labels) if label == "album"),
+                        None,
+                    )
+            current_year = None
+            for cells in rows:
+                labels = [
+                    normalize_text(cell.get_text(" ", strip=True)) if cell else "" for cell in cells
+                ]
+                if any(label in {"title", "track", "single", "song"} for label in labels):
+                    continue
+                if title_index is None or title_index >= len(cells):
+                    continue
+                year_cell = (
+                    cells[year_index]
+                    if year_index is not None and year_index < len(cells)
+                    else None
+                )
+                year = _year(_wikipedia_node_text(year_cell)) if year_cell else None
+                current_year = year or current_year
+                cell = cells[title_index]
+                if not cell:
+                    continue
+                raw_title = _wikipedia_node_text(cell)
+                quoted = re.search(r'["“](.*?)["”]', raw_title)
+                anchor = _wikipedia_title_anchor(cell)
+                title = _clean_wikipedia_title(
+                    quoted.group(1)
+                    if quoted
+                    else (anchor.get_text(" ", strip=True) if anchor else raw_title)
+                )
+                album_title = ""
+                if album_index is not None and album_index < len(cells) and cells[album_index]:
+                    album_title = _clean_wikipedia_title(_wikipedia_node_text(cells[album_index]))
+                    if normalize_text(album_title).startswith("non album"):
+                        album_title = ""
+                normalized_title = normalize_text(title)
+                if normalized_title and normalized_title not in {
+                    "title",
+                    "track",
+                    "single",
+                    "song",
+                }:
+                    output.append((kind, title, current_year, album_title))
         elif element.name == "ul":
             for item in element.find_all("li", recursive=False):
                 raw_title = _wikipedia_node_text(item)
@@ -551,13 +673,48 @@ def _section_candidates(html):
                     quoted.group(1) if quoted else (anchor.get_text(strip=True) if anchor else "")
                 )
                 if title:
-                    output.append((kind, title, _year(raw_title)))
-    seen = set()
-    return [
-        x
-        for x in output
-        if (normalize_text(x[1]), x[0]) not in seen and not seen.add((normalize_text(x[1]), x[0]))
-    ]
+                    output.append((kind, title, _year(raw_title), ""))
+    deduplicated = {}
+    for candidate in output:
+        key = (normalize_text(candidate[1]), candidate[0])
+        existing = deduplicated.get(key)
+        if not existing:
+            deduplicated[key] = candidate
+            continue
+        deduplicated[key] = (
+            existing[0],
+            existing[1],
+            existing[2] or candidate[2],
+            existing[3] or candidate[3],
+        )
+    return list(deduplicated.values())
+
+
+def _merge_candidate_context(candidates):
+    """Share known single/album context with video mentions of the same song."""
+    album_by_title = {}
+    for kind, title, year, album_title in candidates:
+        key = _title_key(title)
+        if album_title and (
+            key not in album_by_title or kind == NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE
+        ):
+            album_by_title[key] = album_title
+
+    merged = {}
+    for kind, title, year, album_title in candidates:
+        key = (kind, _title_key(title))
+        candidate = (kind, title, year, album_title or album_by_title.get(key[1], ""))
+        existing = merged.get(key)
+        if not existing:
+            merged[key] = candidate
+        else:
+            merged[key] = (
+                existing[0],
+                existing[1],
+                existing[2] or candidate[2],
+                existing[3] or candidate[3],
+            )
+    return list(merged.values())
 
 
 def _wikipedia_infobox(html):
@@ -695,7 +852,8 @@ def enrich_wikipedia(artist):
             wikipedia_url(discography_title),
         )
         candidates.extend(_section_candidates(discography.get("text", "")))
-    for kind, song_title, year in candidates:
+    candidates = _merge_candidate_context(candidates)
+    for kind, song_title, year, album_title in candidates:
         external_id = f"{parsed.get('pageid') or title}:{kind}:{normalize_text(song_title)}"
         record = _record(
             Source.WIKIPEDIA,
@@ -711,6 +869,7 @@ def enrich_wikipedia(artist):
             song_title,
             kind,
             year=year,
+            album_title=album_title,
             source_confidence=confidence,
         )
     infobox = _wikipedia_infobox(html)
@@ -785,10 +944,12 @@ def enrich_wikipedia(artist):
                 artist,
                 song_title,
                 kind,
+                year=album.year,
+                album_title=album.title,
                 source_confidence=album_confidence,
                 notes=f"Listed in the singles infobox for {album_title}.",
             )
-            candidates.append((kind, song_title, None))
+            candidates.append((kind, song_title, album.year, album.title))
         for genre_name in album_info.get("genre", []) + album_info.get("genres", []):
             normalized = normalize_text(genre_name)
             if not normalized:
@@ -900,6 +1061,25 @@ def refresh_noteworthy_decisions(artist=None):
     tracks_by_artist = {}
     source_confidence_cache = {}
     now = timezone.now()
+    evidence_items = list(evidence_items)
+    track_context = {}
+    context_priority = {
+        NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE: 3,
+        NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE: 3,
+        NoteworthyEvidence.EvidenceType.SPOTIFY_TOP: 2,
+    }
+    for item in evidence_items:
+        external = item.external_track
+        if not external or not external.album_title:
+            continue
+        key = (item.artist_id, _title_key(external.title))
+        priority = context_priority.get(item.evidence_type, 1)
+        if key not in track_context or priority > track_context[key][0]:
+            track_context[key] = (
+                priority,
+                external.album_title,
+                external.year,
+            )
     for evidence in evidence_items:
         external = evidence.external_track
         match_decision = Decision.REJECTED
@@ -910,11 +1090,19 @@ def refresh_noteworthy_decisions(artist=None):
                     external.title = cleaned_title
             local_tracks = tracks_by_artist.get(evidence.artist_id)
             if local_tracks is None:
-                local_tracks = list(evidence.artist.tracks.filter(is_available=True))
+                local_tracks = list(
+                    evidence.artist.tracks.filter(is_available=True).select_related("album")
+                )
                 tracks_by_artist[evidence.artist_id] = local_tracks
+            context = track_context.get(
+                (evidence.artist_id, _title_key(external.title)),
+                (0, "", None),
+            )
             matched, match_confidence, match_decision = _match_local_track(
                 evidence.artist,
                 external.title,
+                year=external.year or context[2],
+                album_title=external.album_title or context[1],
                 settings=settings,
                 tracks=local_tracks,
             )
@@ -958,11 +1146,12 @@ def refresh_noteworthy_decisions(artist=None):
             )
             reason = f"Last.fm artist top-track rank {rank}; automatic cutoff is {settings.lastfm_noteworthy_max_rank}."
         elif evidence.evidence_type in {
+            NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE,
             NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
             NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
         }:
             qualifies = True
-            reason = evidence.notes or "Explicitly listed by Wikipedia."
+            reason = evidence.notes or "Explicitly classified as a single by a source."
         elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL:
             payload = external.source_record.payload if external else {}
             confidence = _youtube_confidence(payload, evidence.artist)

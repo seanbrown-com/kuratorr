@@ -95,6 +95,10 @@ def test_artist_page_uses_searchable_table(client, django_user_model, track):
     assert all(value in body for value in ("<table>", "Deftones", "Available tracks"))
     assert "card-list" not in body
 
+    detail = client.get(reverse("artist-detail", args=[track.artist.pk])).content.decode()
+    assert "Notable Tracks/Singles" in detail
+    assert "Greatest hits" not in detail
+
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)

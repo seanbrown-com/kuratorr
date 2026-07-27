@@ -14,7 +14,11 @@ Official reference: <https://www.last.fm/api/show/artist.getTopTracks>
 
 ## MusicBrainz
 
-Matches artists, browses release groups, stores MBIDs, gathers release-group genres/tags, and reads artist relationships. Release-group evidence is matched to local albums instead of applying a timeless artist-wide genre.
+Matches artists, browses release groups, stores MBIDs, gathers release-group
+genres/tags, and reads artist relationships. Official release groups whose
+primary type is `Single` are stored as independent notable-track evidence.
+Release-group evidence is matched to local albums instead of applying a timeless
+artist-wide genre.
 
 MusicBrainz permits an average of one request per second per source IP. Kuratorr coordinates this limit across all Celery worker processes with a Redis lock and timestamp, rather than relying on a process-local delay. If Redis is temporarily unavailable, the client falls back to a local limiter and continues using bounded retries.
 
@@ -22,7 +26,14 @@ Official reference: <https://musicbrainz.org/doc/MusicBrainz_API>
 
 ## Wikipedia
 
-Uses the MediaWiki API to search and obtain parsed page HTML. It examines sections named Singles, Music videos, or Videography, accepting both tables and lists. Because page structure is community-authored and inconsistent, extracted mentions still pass through local fuzzy matching and review state. The legacy parser in `legacy/` and the sibling `wiki_music_scraper` project informed this implementation, but are not runtime dependencies.
+Uses the MediaWiki API to search and obtain parsed page HTML. It examines sections
+named Singles, Promotional singles, Music videos, or Videography, accepting both
+tables and lists. Nested decade headings retain their parent section, and
+rowspan/colspan expansion preserves each track's year and album. Because page
+structure is community-authored and inconsistent, extracted mentions still pass
+through local fuzzy matching and review state. The legacy parser in `legacy/` and
+the sibling `wiki_music_scraper` project informed this implementation, but are not
+runtime dependencies.
 
 Official reference: <https://www.mediawiki.org/wiki/API:Main_page>
 

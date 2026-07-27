@@ -35,9 +35,22 @@
 6. YouTube additionally requires an official-video confidence threshold and excludes known non-video formats.
 7. Accepted evidence contributes to playlists. Pending/rejected evidence does not.
 
-Wikipedia table/list parsing removes rendered citation nodes and trailing reference markers before storing a candidate title. During reconciliation, title confidence is recalculated from the current external and local titles rather than retaining a stale historical minimum; provider/artist identity confidence is evaluated separately.
+Wikipedia table/list parsing removes rendered citation nodes and trailing
+reference markers before storing a candidate title. Discography table rowspans
+are expanded so year and album remain attached to subsequent singles. During
+reconciliation, title confidence is recalculated from the current external and
+local titles rather than retaining a stale historical minimum; provider/artist
+identity confidence is evaluated separately. When multiple local copies share a
+title, an exact source album is preferred, followed by the closest release year.
+Album context from a formal single can also disambiguate another source's video
+or popularity evidence for the same recording.
 
-MusicBrainz album release groups that do not match a local album are materialized separately as `MissingAlbum` records. The Missing page shows only releases that can be associated with at least one source-qualified noteworthy external track and supports release-type filtering. Records are reconciled whenever MusicBrainz enrichment runs again; singles and other non-album release groups are not presented as missing albums.
+MusicBrainz album release groups that do not match a local album are materialized
+separately as `MissingAlbum` records. MusicBrainz Single release groups are
+noteworthy-track evidence instead of missing albums. The Missing page shows only
+releases that can be associated with at least one source-qualified noteworthy
+external track and supports release-type filtering. Records are reconciled
+whenever MusicBrainz enrichment runs again.
 8. Manual album genres take precedence over automatic genre selection.
 
 ## Scan semantics

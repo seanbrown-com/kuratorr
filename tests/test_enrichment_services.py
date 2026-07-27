@@ -25,6 +25,7 @@ from enrichment.services import (
     _album_infobox_singles,
     _best_album_candidate,
     _match_local_track,
+    _merge_candidate_context,
     _section_candidates,
     _wikipedia_infobox,
     _youtube_confidence,
@@ -79,8 +80,8 @@ def test_wikipedia_parser_reads_single_and_video_sections():
     <h2>Music videos</h2><ul><li>2001 – \"Back to School\"</li></ul>
     """
     values = _section_candidates(html)
-    assert ("wikipedia_single", "Change", 2000) in values
-    assert ("wikipedia_video", "Back to School", 2001) in values
+    assert ("wikipedia_single", "Change", 2000, "") in values
+    assert ("wikipedia_video", "Back to School", 2001, "") in values
 
 
 def test_wikipedia_parser_removes_reference_markup_and_unmatched_quote():
@@ -93,8 +94,8 @@ def test_wikipedia_parser_removes_reference_markup_and_unmatched_quote():
     """
 
     assert _section_candidates(html) == [
-        ("wikipedia_video", "Image of the Invisible", 2005),
-        ("wikipedia_video", "Come All You Weary", 2008),
+        ("wikipedia_video", "Image of the Invisible", 2005, ""),
+        ("wikipedia_video", "Come All You Weary", 2008, ""),
     ]
 
 
@@ -108,9 +109,101 @@ def test_wikipedia_parser_keeps_non_album_singles_in_rowspan_tables():
     </table>
     """
     values = _section_candidates(html)
-    assert ("wikipedia_single", "Album Single", 2025) in values
-    assert ("wikipedia_single", "Standalone Single", 2025) in values
-    assert all(title != "Non-album single" for _, title, _ in values)
+    assert ("wikipedia_single", "Album Single", 2025, "Studio Album") in values
+    assert ("wikipedia_single", "Standalone Single", 2025, "") in values
+    assert all(title != "Non-album single" for _, title, _, _ in values)
+
+
+def test_wikipedia_parser_keeps_decade_subsections_and_rowspan_album_context():
+    html = """
+    <h2>Singles</h2>
+    <h3>2000's</h3>
+    <table class="wikitable">
+      <tr><th>Title</th><th>Year</th><th>Peak</th><th>Album</th></tr>
+      <tr><td>"Wasteland"</td><td rowspan="3">2005</td><td>1</td><td rowspan="3">The Autumn Effect</td></tr>
+      <tr><td>"Through the Iris"</td><td>35</td></tr>
+      <tr><td>"Waking Up"</td><td>32</td></tr>
+    </table>
+    <h3>2010's</h3>
+    <table class="wikitable">
+      <tr><th>Title</th><th>Year</th><th>Peak</th><th>Album</th></tr>
+      <tr><td>"Shoot It Out"</td><td>2010</td><td>6</td><td rowspan="2">Feeding the Wolves</td></tr>
+      <tr><td>"Fix Me"</td><td>2011</td><td>10</td></tr>
+    </table>
+    """
+
+    assert _section_candidates(html) == [
+        ("wikipedia_single", "Wasteland", 2005, "The Autumn Effect"),
+        ("wikipedia_single", "Through the Iris", 2005, "The Autumn Effect"),
+        ("wikipedia_single", "Waking Up", 2005, "The Autumn Effect"),
+        ("wikipedia_single", "Shoot It Out", 2010, "Feeding the Wolves"),
+        ("wikipedia_single", "Fix Me", 2011, "Feeding the Wolves"),
+    ]
+
+
+def test_wikipedia_single_album_context_is_applied_to_matching_video():
+    candidates = [
+        ("wikipedia_single", "Wasteland", 2005, "The Autumn Effect"),
+        ("wikipedia_video", "Wasteland", 2004, ""),
+    ]
+
+    assert _merge_candidate_context(candidates) == [
+        ("wikipedia_single", "Wasteland", 2005, "The Autumn Effect"),
+        ("wikipedia_video", "Wasteland", 2004, "The Autumn Effect"),
+    ]
+
+
+@pytest.mark.django_db
+def test_duplicate_track_title_prefers_source_album_then_closest_year(artist, root):
+    older_album = Album.objects.create(
+        artist=artist,
+        title="Killing All That Holds You",
+        normalized_title=normalize_text("Killing All That Holds You"),
+        year=2004,
+    )
+    canonical_album = Album.objects.create(
+        artist=artist,
+        title="The Autumn Effect",
+        normalized_title=normalize_text("The Autumn Effect"),
+        year=2005,
+    )
+    older_track = Track.objects.create(
+        library_root=root,
+        artist=artist,
+        album=older_album,
+        full_path=f"{root.path}/older.mp3",
+        relative_path="older.mp3",
+        file_format="mp3",
+        title="Wasteland",
+        normalized_title="wasteland",
+        duration_seconds=Decimal("240"),
+        file_size=1,
+        file_modified_ns=1,
+    )
+    canonical_track = Track.objects.create(
+        library_root=root,
+        artist=artist,
+        album=canonical_album,
+        full_path=f"{root.path}/canonical.mp3",
+        relative_path="canonical.mp3",
+        file_format="mp3",
+        title="Wasteland",
+        normalized_title="wasteland",
+        duration_seconds=Decimal("240"),
+        file_size=1,
+        file_modified_ns=2,
+    )
+
+    matched, confidence, decision = _match_local_track(
+        artist,
+        "Wasteland",
+        year=2005,
+        album_title="The Autumn Effect",
+    )
+    assert matched == canonical_track
+    assert matched != older_track
+    assert confidence == Decimal("1")
+    assert decision == Decision.ACCEPTED
 
 
 def test_youtube_rejects_lyrics_and_extracts_title():
@@ -176,7 +269,9 @@ def test_wikipedia_uses_exact_artist_page_when_search_omits_it(artist, monkeypat
 
 
 @pytest.mark.django_db
-def test_musicbrainz_catalog_records_only_missing_albums(artist, album, monkeypatch):
+def test_musicbrainz_catalog_records_missing_albums_and_single_evidence(
+    artist, album, track, monkeypatch
+):
     class FakeMusicBrainz:
         def find_artist(self, name):
             return [{"id": "artist-1", "name": name}]
@@ -198,9 +293,9 @@ def test_musicbrainz_catalog_records_only_missing_albums(artist, album, monkeypa
                 },
                 {
                     "id": "single",
-                    "title": "Minerva",
+                    "title": track.title,
                     "primary-type": "Single",
-                    "first-release-date": "2003",
+                    "first-release-date": "2000",
                 },
             ]
 
@@ -209,13 +304,18 @@ def test_musicbrainz_catalog_records_only_missing_albums(artist, album, monkeypa
 
     monkeypatch.setattr("enrichment.services.MusicBrainzClient", FakeMusicBrainz)
 
-    assert enrich_musicbrainz(artist)["albums"] == 1
+    assert enrich_musicbrainz(artist) == {"albums": 1, "singles": 1}
     missing = MissingAlbum.objects.get()
     assert (missing.title, missing.year, missing.release_type) == (
         "Saturday Night Wrist",
         2006,
         "Album",
     )
+    single = NoteworthyEvidence.objects.get(
+        evidence_type=NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE
+    )
+    assert single.track == track
+    assert single.decision == Decision.ACCEPTED
 
 
 def test_youtube_requires_explicit_official_music_video_and_artist_channel():
