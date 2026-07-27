@@ -589,6 +589,13 @@ def _section_candidates(html):
                 kind = NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO
             elif element.name == "h2":
                 kind = None
+            elif kind == NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE and not re.fullmatch(
+                r"(?:19|20)\d0 ?s(?: present)?", heading
+            ):
+                # A sibling subsection such as "Other appearances" or "List of
+                # other songs" ends a singles table. Decade headings remain part
+                # of the parent Singles section.
+                kind = None
             continue
         if not kind:
             continue
@@ -778,11 +785,13 @@ def _discography_title(html):
     for anchor in soup.find_all("a"):
         label = normalize_text(anchor.get_text(" ", strip=True))
         title = anchor.get("title", "")
-        if "discography" not in label and "discography" not in normalize_text(title):
-            continue
-        if title:
-            return title
         href = anchor.get("href", "")
+        if (
+            "discography" not in label
+            and "discography" not in normalize_text(title)
+            and "discography" not in normalize_text(href)
+        ):
+            continue
         if "/wiki/" in href:
             return unquote(href.split("/wiki/", 1)[1]).replace("_", " ")
         if href.startswith("./"):

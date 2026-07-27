@@ -24,6 +24,7 @@ from enrichment.models import (
 from enrichment.services import (
     _album_infobox_singles,
     _best_album_candidate,
+    _discography_title,
     _match_local_track,
     _merge_candidate_context,
     _section_candidates,
@@ -141,6 +142,52 @@ def test_wikipedia_parser_keeps_decade_subsections_and_rowspan_album_context():
     ]
 
 
+def test_wikipedia_parser_stops_before_submersed_other_songs():
+    html = """
+    <h2>Discography</h2>
+    <h3>Singles</h3>
+    <table>
+      <tr><th>Year</th><th>Title</th><th>Album</th></tr>
+      <tr><td>2003</td><td>"You Run"</td><td>In Due Time</td></tr>
+      <tr><td>2004</td><td>"Hollow"</td><td>In Due Time</td></tr>
+    </table>
+    <h3>List of other songs</h3>
+    <ul>
+      <li>"Complicated" featured in a soundtrack</li>
+      <li>"Broken Man" from an unreleased album</li>
+    </ul>
+    """
+
+    assert _section_candidates(html) == [
+        ("wikipedia_single", "You Run", 2003, "In Due Time"),
+        ("wikipedia_single", "Hollow", 2004, "In Due Time"),
+    ]
+
+
+def test_wikipedia_parser_stops_before_thursday_other_appearances():
+    html = """
+    <h2>Songs</h2>
+    <h3>Singles</h3>
+    <table>
+      <tr><th>Title</th><th>Year</th><th>Album</th></tr>
+      <tr><td>"Understanding in a Car Crash"</td><td>2001</td>
+          <td>Full Collapse</td></tr>
+      <tr><td>"Cross Out the Eyes"</td><td>2002</td><td>Full Collapse</td></tr>
+    </table>
+    <h3>Other appearances</h3>
+    <table>
+      <tr><th>Title</th><th>Year</th><th>Album</th></tr>
+      <tr><td>"Ian Curtis"</td><td>2000</td><td>Status 12</td></tr>
+      <tr><td>"Rape Me"</td><td>2014</td><td>Tribute album</td></tr>
+    </table>
+    """
+
+    assert _section_candidates(html) == [
+        ("wikipedia_single", "Understanding in a Car Crash", 2001, "Full Collapse"),
+        ("wikipedia_single", "Cross Out the Eyes", 2002, "Full Collapse"),
+    ]
+
+
 def test_wikipedia_single_album_context_is_applied_to_matching_video():
     candidates = [
         ("wikipedia_single", "Wasteland", 2005, "The Autumn Effect"),
@@ -151,6 +198,120 @@ def test_wikipedia_single_album_context_is_applied_to_matching_video():
         ("wikipedia_single", "Wasteland", 2005, "The Autumn Effect"),
         ("wikipedia_video", "Wasteland", 2004, "The Autumn Effect"),
     ]
+
+
+def test_wikipedia_discography_link_ignores_section_edit_control():
+    html = """
+    <h2>
+      Discography
+      <span class="mw-editsection">
+        <a href="/w/index.php?title=10_Years_(band)&action=edit&section=17"
+           title="Edit section: Discography">edit</a>
+      </span>
+    </h2>
+    <p>Main article:
+      <a href="/wiki/10_Years_discography" title="10 Years discography">
+        10 Years discography
+      </a>
+    </p>
+    """
+
+    assert _discography_title(html) == "10 Years discography"
+
+
+@pytest.mark.django_db
+def test_wikipedia_enrichment_reads_singles_from_linked_discography(root, monkeypatch):
+    artist = Artist.objects.create(
+        name="10 Years",
+        sort_name="10 Years",
+        normalized_name=normalize_text("10 Years"),
+    )
+    album = Album.objects.create(
+        artist=artist,
+        title="The Autumn Effect",
+        normalized_title=normalize_text("The Autumn Effect"),
+        year=2005,
+    )
+    local_track = Track.objects.create(
+        library_root=root,
+        artist=artist,
+        album=album,
+        full_path=f"{root.path}/Wasteland.mp3",
+        relative_path="Wasteland.mp3",
+        file_format="mp3",
+        title="Wasteland",
+        normalized_title=normalize_text("Wasteland"),
+        year=2005,
+        duration_seconds=Decimal("240"),
+        file_size=100,
+        file_modified_ns=1,
+    )
+
+    class FakeWikipedia:
+        def page_html(self, title):
+            if title == "10 Years":
+                return {
+                    "pageid": 1,
+                    "title": "10 Years",
+                    "text": '<div class="redirectMsg">Redirect to 10 years</div>',
+                }
+            if title == "10 Years (band)":
+                return {
+                    "pageid": 2,
+                    "title": title,
+                    "text": """
+                      <table class="infobox">
+                        <tr><th>Origin</th><td>Knoxville, Tennessee</td></tr>
+                      </table>
+                      <h2>Discography
+                        <a href="/w/index.php?title=10_Years_(band)&action=edit&section=17"
+                           title="Edit section: Discography">edit</a>
+                      </h2>
+                      <p><a href="/wiki/10_Years_discography"
+                            title="10 Years discography">10 Years discography</a></p>
+                    """,
+                }
+            if title == "10 Years discography":
+                return {
+                    "pageid": 3,
+                    "title": title,
+                    "text": """
+                      <h2>Singles</h2>
+                      <table>
+                        <tr><th>Title</th><th>Year</th><th>Album</th></tr>
+                        <tr><td>"Wasteland"</td><td>2005</td>
+                            <td>The Autumn Effect</td></tr>
+                        <tr><td>"Through the Iris"</td><td>2006</td>
+                            <td>The Autumn Effect</td></tr>
+                      </table>
+                    """,
+                }
+            raise AssertionError(f"Unexpected Wikipedia page: {title}")
+
+        def find_page(self, query):
+            if query == "10 Years":
+                return [
+                    {
+                        "title": "10 Years (band)",
+                        "snippet": "American alternative metal band",
+                    }
+                ]
+            return []
+
+    monkeypatch.setattr("enrichment.services.WikipediaClient", FakeWikipedia)
+
+    result = enrich_wikipedia(artist)
+
+    assert result["tracks"] == 2
+    evidence = NoteworthyEvidence.objects.filter(
+        artist=artist,
+        evidence_type=NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+    )
+    assert set(evidence.values_list("external_track__title", flat=True)) == {
+        "Through the Iris",
+        "Wasteland",
+    }
+    assert evidence.get(external_track__title="Wasteland").track == local_track
 
 
 @pytest.mark.django_db
