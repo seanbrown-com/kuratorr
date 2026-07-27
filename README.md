@@ -57,7 +57,7 @@ make directory browsing stall.
 Useful commands:
 
 ```bash
-docker compose logs -f web worker beat
+docker compose logs -f web worker worker-enrichment worker-recommendations worker-playlists beat
 docker compose exec web python manage.py check
 docker compose exec web pytest -q
 docker compose down
@@ -87,7 +87,7 @@ eligible for automatic enrichment again.
 ## Processing flow
 
 1. An administrator adds a mounted library root and starts a scan.
-2. The worker reads changed/new MP3 and FLAC files, preserves raw metadata, and marks disappeared files unavailable.
+2. The control worker reads changed/new MP3 and FLAC files, stores the metadata fields Kuratorr uses, and marks disappeared files unavailable.
 3. A complete scan stops after importing local tags and filesystem metadata; enrichment is started manually from the dashboard.
 4. Manual library enrichment queues one child job per available artist. Each source stores its response separately, proposes entity matches, and records noteworthy evidence while the parent job tracks child completion.
 5. Whole-title matches at or above the configured acceptance threshold are accepted; only close ambiguous matches enter Review, while unrelated titles are rejected automatically.
@@ -95,7 +95,11 @@ eligible for automatic enrichment again.
 7. Playlist generation uses accepted noteworthy evidence and accepted related-artist evidence.
 8. Database playlists may optionally be written as M3U files to each enabled output directory.
 
-Queued and running jobs can be cancelled from Job History. Jobs without a worker heartbeat are reconciled to Failed instead of remaining Running indefinitely.
+Control/scanning, enrichment, recommendations, and playlist work use independent
+Celery queues. A provider backlog cannot prevent a recommendation or playlist job
+from starting. Queued and running jobs can be cancelled from Job History. Jobs
+without a worker heartbeat are reconciled to Failed instead of remaining Running
+indefinitely.
 
 ## Native development
 
@@ -113,7 +117,10 @@ cp .env.example .env
 In separate terminals:
 
 ```bash
-.venv/bin/celery -A config worker --loglevel=INFO
+.venv/bin/celery -A config worker --loglevel=INFO --queues=control,celery --hostname=control@%h
+.venv/bin/celery -A config worker --loglevel=INFO --queues=enrichment --concurrency=2 --hostname=enrichment@%h
+.venv/bin/celery -A config worker --loglevel=INFO --queues=recommendations --concurrency=1 --hostname=recommendations@%h
+.venv/bin/celery -A config worker --loglevel=INFO --queues=playlists --concurrency=1 --hostname=playlists@%h
 .venv/bin/celery -A config beat --loglevel=INFO
 ```
 

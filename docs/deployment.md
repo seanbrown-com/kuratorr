@@ -34,14 +34,16 @@ After editing units or `.env`:
 
 ```bash
 systemctl daemon-reload
-systemctl restart kuratorr-web kuratorr-worker kuratorr-beat
+systemctl restart kuratorr-web kuratorr-worker kuratorr-worker-enrichment \
+  kuratorr-worker-recommendations kuratorr-worker-playlists kuratorr-beat
 ```
 
 ## Observe
 
 ```bash
-systemctl status kuratorr-web kuratorr-worker kuratorr-beat
-journalctl -u kuratorr-worker -f
+systemctl status kuratorr-web kuratorr-worker kuratorr-worker-enrichment \
+  kuratorr-worker-recommendations kuratorr-worker-playlists kuratorr-beat
+journalctl -u kuratorr-worker-enrichment -f
 nginx -t
 curl -fsS https://YOUR_DOMAIN/health/
 ```

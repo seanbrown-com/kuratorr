@@ -26,7 +26,7 @@ def _run(job_type, callback, job_id=None, task_id=""):
         raise
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, priority=9)
 def generate_playlists_task(self, job_id=None):
     return _run(
         "generate_playlists",
@@ -38,6 +38,6 @@ def generate_playlists_task(self, job_id=None):
     )
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, priority=9)
 def materialize_playlists_task(self, job_id=None):
     return _run("materialize_playlists", materialize_all, job_id, self.request.id or "")

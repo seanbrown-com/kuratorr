@@ -645,6 +645,8 @@ def test_pending_enrichment_retries_stale_musicbrainz_failures(artist, monkeypat
 
     assert run_pending_enrichments() == 1
     assert queued == [(artist.pk, Source.MUSICBRAINZ)]
+    status.refresh_from_db()
+    assert status.retry_at > timezone.now() + timedelta(hours=23)
 
     status.last_attempted_at = timezone.now()
     status.save(update_fields=["last_attempted_at"])
@@ -707,6 +709,52 @@ def test_rate_limited_source_is_deferred_until_retry_time(artist, monkeypatch):
 
 
 @pytest.mark.django_db
+def test_provider_error_is_deferred_instead_of_failing_artist_job(artist, monkeypatch):
+    from enrichment.models import JobRun
+    from enrichment.tasks import ENRICHERS, enrich_artist_task
+
+    def quota_exhausted(current_artist):
+        raise RateLimited("youtube", 24 * 60 * 60, "YouTube daily quota exhausted")
+
+    monkeypatch.setitem(ENRICHERS, "youtube", quota_exhausted)
+    job = JobRun.objects.create(job_type="enrich_youtube", requested_manually=True)
+
+    result = enrich_artist_task(artist.pk, "youtube", job.pk)
+
+    job.refresh_from_db()
+    assert job.status == JobRun.Status.SUCCEEDED
+    assert job.error == ""
+    assert result["deferred_sources"] == ["youtube"]
+    assert job.summary["youtube"]["rate_limited"] is True
+
+
+@pytest.mark.django_db
+def test_retry_scheduler_skips_provider_during_shared_cooldown(artist, monkeypatch):
+    from enrichment.models import ArtistSourceStatus
+    from enrichment.tasks import BaseClient, enrich_artist_task, run_pending_enrichments
+
+    ArtistSourceStatus.objects.create(
+        artist=artist,
+        source=Source.YOUTUBE,
+        last_attempted_at=timezone.now() - timedelta(days=1),
+        last_error="daily quota exhausted",
+        retry_at=timezone.now() - timedelta(seconds=1),
+    )
+    monkeypatch.setattr(
+        BaseClient,
+        "cooldown_remaining_for",
+        classmethod(lambda cls, source: 3600 if source == Source.YOUTUBE else 0),
+    )
+    monkeypatch.setattr(
+        enrich_artist_task,
+        "delay",
+        lambda *args, **kwargs: pytest.fail("cooling-down provider was queued"),
+    )
+
+    assert run_pending_enrichments() == 0
+
+
+@pytest.mark.django_db
 def test_library_enrichment_children_advance_parent_progress(track, monkeypatch):
     from enrichment.models import JobRun
     from enrichment.tasks import (
@@ -737,3 +785,74 @@ def test_library_enrichment_children_advance_parent_progress(track, monkeypatch)
     assert parent.status == JobRun.Status.SUCCEEDED
     assert (parent.progress_current, parent.progress_total) == (1, 1)
     assert child.status == JobRun.Status.SUCCEEDED
+
+
+@pytest.mark.django_db
+def test_deferred_provider_does_not_fail_library_enrichment(track, monkeypatch):
+    from enrichment.models import JobRun
+    from enrichment.tasks import (
+        ENRICHERS,
+        enrich_artist_task,
+        enrich_library_task,
+        refresh_artist_recommendations_task,
+    )
+    from playlists.tasks import generate_playlists_task
+
+    def quota_exhausted(current_artist):
+        raise RateLimited("youtube", 24 * 60 * 60, "YouTube daily quota exhausted")
+
+    for source in ENRICHERS:
+        monkeypatch.setitem(ENRICHERS, source, lambda current_artist: {"processed": 1})
+    monkeypatch.setitem(ENRICHERS, "youtube", quota_exhausted)
+    monkeypatch.setattr(refresh_artist_recommendations_task, "delay", lambda: None)
+    monkeypatch.setattr(generate_playlists_task, "delay", lambda: None)
+
+    def run_child(artist_id, source=None, job_id=None):
+        enrich_artist_task(artist_id, source, job_id)
+        return type("Result", (), {"id": f"child-{job_id}"})()
+
+    monkeypatch.setattr(enrich_artist_task, "delay", run_child)
+    parent = JobRun.objects.create(job_type="enrich_library", requested_manually=True)
+
+    enrich_library_task(parent.pk)
+
+    parent.refresh_from_db()
+    assert parent.status == JobRun.Status.SUCCEEDED
+    assert parent.summary["failed"] == 0
+    assert parent.summary["artists_with_deferred_sources"] == 1
+
+
+def test_manual_and_control_tasks_have_higher_priority():
+    from enrichment.tasks import (
+        CONTROL_PRIORITY,
+        enrich_artist_task,
+        enrich_library_task,
+        refresh_artist_recommendations_task,
+        refresh_noteworthy_decisions_task,
+        run_pending_enrichments,
+    )
+    from library.tasks import scan_root_task
+    from playlists.tasks import generate_playlists_task, materialize_playlists_task
+
+    assert enrich_artist_task.priority < CONTROL_PRIORITY
+    for task in (
+        enrich_library_task,
+        refresh_artist_recommendations_task,
+        refresh_noteworthy_decisions_task,
+        run_pending_enrichments,
+        scan_root_task,
+        generate_playlists_task,
+        materialize_playlists_task,
+    ):
+        assert task.priority == CONTROL_PRIORITY
+
+
+def test_celery_tasks_are_routed_to_independent_queues(settings):
+    routes = settings.CELERY_TASK_ROUTES
+
+    assert routes["enrichment.tasks.enrich_artist_task"]["queue"] == "enrichment"
+    assert (
+        routes["enrichment.tasks.refresh_artist_recommendations_task"]["queue"] == "recommendations"
+    )
+    assert routes["playlists.tasks.*"]["queue"] == "playlists"
+    assert routes["library.tasks.*"]["queue"] == "control"

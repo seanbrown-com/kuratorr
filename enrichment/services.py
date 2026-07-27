@@ -1000,11 +1000,14 @@ def refresh_noteworthy_decisions(artist=None):
     return {"accepted": accepted, "rejected": rejected, "pending": pending}
 
 
-def refresh_album_genres():
+def refresh_album_genres(artist=None):
     settings = ServiceSettings.load()
     from library.models import AlbumGenre
 
-    for album in Album.objects.all():
+    albums = Album.objects.all()
+    if artist is not None:
+        albums = albums.filter(artist=artist)
+    for album in albums:
         if album.genre_assignments.filter(is_manual=True).exists():
             continue
         evidence = album.genre_evidence.filter(decision=Decision.ACCEPTED).order_by(

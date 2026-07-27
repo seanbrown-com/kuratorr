@@ -9,6 +9,7 @@ from library.services import scan_library_root
 
 @shared_task(
     bind=True,
+    priority=9,
     time_limit=settings.SCAN_TASK_TIME_LIMIT,
     soft_time_limit=settings.SCAN_TASK_SOFT_TIME_LIMIT,
 )

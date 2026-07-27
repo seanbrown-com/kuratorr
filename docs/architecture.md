@@ -4,7 +4,8 @@
 
 - **Django/Gunicorn:** authenticated operator UI, configuration, review, and exports.
 - **PostgreSQL:** canonical library entities, source observations, job history, review state, and playlist snapshots.
-- **Redis/Celery:** durable asynchronous scans, enrichment, playlist generation, and scheduled continuation.
+- **Redis/Celery:** durable asynchronous work split across independent control,
+  enrichment, recommendations, and playlists queues.
 - **Celery Beat:** periodically queues a bounded number of artists whose configured sources have not yet been attempted and requeues failed provider work only after its stored retry time.
 - **Nginx:** public TLS termination, static files, proxy headers, and request-size limits.
 
@@ -36,11 +37,20 @@ Scans recurse only into `.mp3` and `.flac` files. Unchanged size and nanosecond 
 
 ## Job semantics
 
-Jobs progress through queued, running, succeeded, failed, or cancelled states. A library scan reads only local files and reports per-file progress; it records the next file path before opening it and never starts enrichment. Scan tasks have independent long-running limits so provider task limits cannot interrupt a large collection. Manual full-library enrichment fans out one child job per available artist, and each terminal child atomically advances the parent’s progress. The parent completes successfully only when every child succeeds. Job History can cooperatively cancel queued/running parents and children. Celery failure signals mark externally terminated tasks failed, while running jobs without a heartbeat for 15 minutes are reconciled as failed as a fallback.
+Jobs progress through queued, running, succeeded, failed, or cancelled states. A library scan reads only local files and reports per-file progress; it records the next file path before opening it and never starts enrichment. Scan tasks have independent long-running limits so provider task limits cannot interrupt a large collection. Manual full-library enrichment fans out one child job per available artist, and each terminal child atomically advances the parent’s progress. Provider-level transient failures and cooldowns are recorded as deferred source attempts rather than failed artist jobs; unexpected task failures still fail the child and parent. Job History can cooperatively cancel queued/running parents and children. Celery failure signals mark externally terminated tasks failed, while running jobs without a heartbeat for 15 minutes are reconciled as failed as a fallback.
 
 Celery tasks are idempotent at their database boundaries: local files use `update_or_create`, source records use source/kind/external-ID uniqueness, evidence has source-specific uniqueness, and playlists use stable definition keys.
 
-External clients use a Redis-backed provider circuit breaker. A 429 response prevents every worker from calling that provider again during the cooldown, honors `Retry-After` when supplied, and applies persistent exponential backoff per artist/source. YouTube daily-quota exhaustion opens a 24-hour cooldown. The continuation task requeues no more than five eligible failed sources per five-minute cycle and leases each queued retry for 15 minutes to prevent duplicate dispatch.
+Control/scanning, enrichment, recommendations, and playlist generation use
+dedicated queues and worker pools. Recommendation and playlist workers each have
+concurrency one, serializing their replace/regenerate operations. Enrichment may
+run concurrently across artists, but album-genre reconciliation is scoped to the
+current artist and transactions remain short and entity-specific. PostgreSQL
+row-level locking therefore does not couple the independent queues during normal
+operation. Workers prefetch one task per process so a worker does not reserve a
+large invisible batch ahead of other work in its queue.
+
+External clients use a Redis-backed provider circuit breaker. A 429 response prevents every worker from calling that provider again during the cooldown, honors `Retry-After` when supplied, and applies persistent exponential backoff per artist/source. YouTube daily-quota exhaustion opens a 24-hour cooldown. The continuation task requeues no more than five eligible failed sources per five-minute cycle, skips providers with an active shared cooldown, and leases each queued retry for 24 hours to prevent duplicate dispatch behind a large backlog.
 
 ## Playlist semantics
 

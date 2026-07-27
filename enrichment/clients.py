@@ -59,24 +59,30 @@ class BaseClient:
     def _cooldown_key(self):
         return f"kuratorr:provider-cooldown:{self.provider_name}"
 
-    def _cooldown_remaining(self):
-        if not self.provider_name:
+    @classmethod
+    def cooldown_remaining_for(cls, provider_name):
+        if not provider_name:
             return 0
         now = time.time()
-        with self.cooldown_lock:
-            local_until = self.local_cooldowns.get(self.provider_name, 0)
+        with cls.cooldown_lock:
+            local_until = cls.local_cooldowns.get(provider_name, 0)
         remaining = local_until - now
         if remaining > 0:
             return remaining
         try:
-            remote_until = float(self._cooldown_store().get(self._cooldown_key()) or 0)
+            remote_until = float(
+                cls._cooldown_store().get(f"kuratorr:provider-cooldown:{provider_name}") or 0
+            )
         except (RedisError, TypeError, ValueError):
             return 0
         if remote_until > now:
-            with self.cooldown_lock:
-                self.local_cooldowns[self.provider_name] = remote_until
+            with cls.cooldown_lock:
+                cls.local_cooldowns[provider_name] = remote_until
             return remote_until - now
         return 0
+
+    def _cooldown_remaining(self):
+        return self.cooldown_remaining_for(self.provider_name)
 
     def _set_cooldown(self, seconds):
         if not self.provider_name:

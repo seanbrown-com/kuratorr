@@ -4,7 +4,7 @@ from celery import shared_task
 from django.db.models import Q
 from django.utils import timezone
 
-from enrichment.clients import ProviderNotConfigured, RateLimited
+from enrichment.clients import BaseClient, ProviderNotConfigured, RateLimited
 from enrichment.job_control import (
     JobCancelled,
     finish_job,
@@ -33,6 +33,8 @@ ENRICHERS = {
     "wikipedia": enrich_wikipedia,
     "youtube": enrich_youtube,
 }
+BACKGROUND_PRIORITY = 0
+CONTROL_PRIORITY = 9
 
 
 def enrich_artist(artist, source=None, cancellation_check=None):
@@ -72,12 +74,12 @@ def enrich_artist(artist, source=None, cancellation_check=None):
             result[name] = {"error": str(exc)}
             status.last_error = str(exc)
         status.save()
-    refresh_album_genres()
+    refresh_album_genres(artist)
     refresh_noteworthy_decisions(artist)
     return result
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, priority=BACKGROUND_PRIORITY)
 def enrich_artist_task(self, artist_id, source=None, job_id=None):
     job = (
         JobRun.objects.get(pk=job_id)
@@ -91,10 +93,12 @@ def enrich_artist_task(self, artist_id, source=None, job_id=None):
             source,
             cancellation_check=lambda: touch_job(job.pk),
         )
-        errors = [value for value in summary.values() if "error" in value]
-        status = JobRun.Status.FAILED if errors else JobRun.Status.SUCCEEDED
-        error = "; ".join(x["error"] for x in errors)
-        finish_job(job, status, summary=summary, error=error)
+        deferred_sources = [
+            name for name, value in summary.items() if isinstance(value, dict) and "error" in value
+        ]
+        if deferred_sources:
+            summary["deferred_sources"] = deferred_sources
+        finish_job(job, JobRun.Status.SUCCEEDED, summary=summary)
         return summary
     except JobCancelled:
         return {"cancelled": True}
@@ -109,7 +113,7 @@ def enrich_artist_task(self, artist_id, source=None, job_id=None):
             generate_playlists_task.delay()
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, priority=CONTROL_PRIORITY)
 def enrich_library_task(self, job_id=None):
     job = (
         JobRun.objects.get(pk=job_id)
@@ -142,12 +146,12 @@ def enrich_library_task(self, job_id=None):
         raise
 
 
-@shared_task
+@shared_task(priority=CONTROL_PRIORITY)
 def run_pending_enrichments():
     reconcile_stale_jobs()
     now = timezone.now()
     retry_before = timezone.now() - timedelta(minutes=15)
-    failed_sources = list(
+    retry_candidates = list(
         ArtistSourceStatus.objects.exclude(last_error="")
         .filter(
             Q(retry_at__lte=now)
@@ -155,10 +159,17 @@ def run_pending_enrichments():
             | Q(retry_at__isnull=True, last_attempted_at__lt=retry_before)
         )
         .select_related("artist")
-        .order_by("retry_at", "last_attempted_at")[:5]
+        .order_by("retry_at", "last_attempted_at")[:100]
     )
+    failed_sources = [
+        status
+        for status in retry_candidates
+        if BaseClient.cooldown_remaining_for(status.source) <= 0
+    ][:5]
     if failed_sources:
-        lease_until = now + timedelta(minutes=15)
+        # A retry can wait behind a large enrichment batch. Keep a long lease so
+        # the beat scheduler cannot enqueue duplicates while it remains in Redis.
+        lease_until = now + timedelta(hours=24)
         for status in failed_sources:
             status.retry_at = lease_until
             status.save(update_fields=["retry_at", "updated_at"])
@@ -168,7 +179,7 @@ def run_pending_enrichments():
     return 0
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, priority=CONTROL_PRIORITY)
 def refresh_noteworthy_decisions_task(self, job_id=None):
     job = (
         JobRun.objects.get(pk=job_id)
@@ -187,7 +198,7 @@ def refresh_noteworthy_decisions_task(self, job_id=None):
         raise
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, priority=CONTROL_PRIORITY)
 def refresh_artist_recommendations_task(self, job_id=None):
     job = (
         JobRun.objects.get(pk=job_id)

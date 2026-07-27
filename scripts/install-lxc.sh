@@ -99,15 +99,27 @@ runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" colle
 
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-web.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-enrichment.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-recommendations.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-playlists.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-beat.service" /etc/systemd/system/
 sed "s/__DOMAIN__/$DOMAIN/g" "$APP_DIR/deploy/nginx/kuratorr.conf" > /etc/nginx/sites-available/kuratorr
 ln -sf /etc/nginx/sites-available/kuratorr /etc/nginx/sites-enabled/kuratorr
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl daemon-reload
-systemctl enable --now postgresql redis-server kuratorr-web kuratorr-worker kuratorr-beat nginx
+systemctl enable --now \
+  postgresql \
+  redis-server \
+  kuratorr-web \
+  kuratorr-worker \
+  kuratorr-worker-enrichment \
+  kuratorr-worker-recommendations \
+  kuratorr-worker-playlists \
+  kuratorr-beat \
+  nginx
 systemctl reload nginx
 if [[ -n "$EMAIL" ]]; then certbot --nginx --non-interactive --agree-tos -m "$EMAIL" -d "$DOMAIN" --redirect; fi
 echo "Installation complete: $URL_SCHEME://$DOMAIN"
 echo "ONE-TIME INITIAL SETUP TOKEN: $SETUP_TOKEN"
-echo "Add API credentials to $APP_DIR/.env, then restart the three Kuratorr services."
+echo "Add API credentials to $APP_DIR/.env, then restart the Kuratorr services."

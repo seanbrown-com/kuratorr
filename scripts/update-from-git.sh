@@ -9,6 +9,14 @@ trap 'status=$?; log "Update failed at line $LINENO (exit $status)." >&2' ERR
 
 if [[ $EUID -ne 0 ]]; then log "Run as root." >&2; exit 1; fi
 APP_DIR=/opt/kuratorr
+KURATORR_SERVICES=(
+  kuratorr-web
+  kuratorr-worker
+  kuratorr-worker-enrichment
+  kuratorr-worker-recommendations
+  kuratorr-worker-playlists
+  kuratorr-beat
+)
 STAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_FILE="/var/backups/kuratorr/kuratorr-$STAMP.dump"
 BACKUP_TIMEOUT=${KURATORR_BACKUP_TIMEOUT:-30m}
@@ -59,10 +67,20 @@ log "Collecting static assets (timeout: $DJANGO_TIMEOUT)..."
 timeout --foreground "$DJANGO_TIMEOUT" \
   runuser -u kuratorr -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" collectstatic --noinput
 
+log "Installing systemd service definitions..."
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-web.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-enrichment.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-recommendations.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-playlists.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-beat.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable "${KURATORR_SERVICES[@]}"
+
 log "Restarting Kuratorr services..."
-systemctl restart kuratorr-web kuratorr-worker kuratorr-beat
+systemctl restart "${KURATORR_SERVICES[@]}"
 systemctl reload nginx
 
 log "Service status:"
-systemctl --no-pager --full status kuratorr-web kuratorr-worker kuratorr-beat
+systemctl --no-pager --full status "${KURATORR_SERVICES[@]}"
 log "Kuratorr update completed successfully."

@@ -15,7 +15,7 @@ from enrichment.models import (
     NoteworthyEvidence,
 )
 from enrichment.services import missing_albums_with_notable_tracks
-from enrichment.tasks import ENRICHERS, enrich_artist_task
+from enrichment.tasks import CONTROL_PRIORITY, ENRICHERS, enrich_artist_task
 from library.models import Artist
 
 
@@ -138,7 +138,10 @@ def run_artist_source(request, artist_id, source):
         messages.error(request, "Unknown enrichment source.")
         return redirect("artist-detail", pk=artist.pk)
     job = JobRun.objects.create(job_type=f"enrich_{source}", requested_manually=True)
-    result = enrich_artist_task.delay(artist.pk, source, job.pk)
+    result = enrich_artist_task.apply_async(
+        args=[artist.pk, source, job.pk],
+        priority=CONTROL_PRIORITY,
+    )
     job.celery_task_id = result.id
     job.save(update_fields=["celery_task_id", "updated_at"])
     messages.success(request, f"{source.title()} enrichment queued for {artist.name}.")

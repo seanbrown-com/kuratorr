@@ -59,16 +59,22 @@ def fail_job_for_task(task_id, error):
     if not task_id:
         return 0
     now = timezone.now()
-    return JobRun.objects.filter(
+    job = JobRun.objects.filter(
         celery_task_id=task_id,
         status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING],
-    ).update(
+    ).first()
+    if not job:
+        return 0
+    JobRun.objects.filter(pk=job.pk).update(
         status=JobRun.Status.FAILED,
         finished_at=now,
         heartbeat_at=now,
         error=str(error)[:10000],
         updated_at=now,
     )
+    if job.parent_id:
+        update_parent_from_children(job.parent_id)
+    return 1
 
 
 def reconcile_stale_jobs(max_silence=timedelta(minutes=15)):
@@ -80,13 +86,18 @@ def reconcile_stale_jobs(max_silence=timedelta(minutes=15)):
         | Q(heartbeat_at__isnull=True, started_at__lt=stale_before)
     )
     count = 0
+    parent_ids = set()
     for job in stale.iterator():
         job.status = JobRun.Status.FAILED
         job.finished_at = job.finished_at or now
         job.heartbeat_at = now
         job.error = job.error or "Job stopped without completing; no worker heartbeat was received."
         job.save(update_fields=["status", "finished_at", "heartbeat_at", "error", "updated_at"])
+        if job.parent_id:
+            parent_ids.add(job.parent_id)
         count += 1
+    for parent_id in parent_ids:
+        update_parent_from_children(parent_id)
     return count
 
 
@@ -125,6 +136,10 @@ def update_parent_from_children(parent_id):
         completed = terminal.count()
         failed = terminal.filter(status=JobRun.Status.FAILED).count()
         cancelled = terminal.filter(status=JobRun.Status.CANCELLED).count()
+        deferred = sum(
+            bool((child.summary or {}).get("deferred_sources"))
+            for child in terminal.only("summary")
+        )
         now = timezone.now()
         parent.progress_current = completed
         parent.heartbeat_at = now
@@ -139,6 +154,7 @@ def update_parent_from_children(parent_id):
                 "succeeded": completed - failed - cancelled,
                 "failed": failed,
                 "cancelled": cancelled,
+                "artists_with_deferred_sources": deferred,
             }
             if failed or cancelled:
                 parent.error = (

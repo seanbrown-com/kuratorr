@@ -1,15 +1,17 @@
 [Unit]
-Description=Kuratorr Celery control worker
+Description=Kuratorr Celery recommendations worker
 After=network.target postgresql.service redis-server.service
 Requires=postgresql.service redis-server.service
 
 [Service]
+Type=simple
 User=kuratorr
 Group=kuratorr
 WorkingDirectory=/opt/kuratorr
 EnvironmentFile=/opt/kuratorr/.env
-ExecStart=/opt/kuratorr/.venv/bin/celery -A config worker --loglevel=INFO --concurrency=1 --queues=control,celery --hostname=control@%%h
-Restart=on-failure
+ExecStart=/opt/kuratorr/.venv/bin/celery -A config worker --loglevel=INFO --concurrency=1 --queues=recommendations --hostname=recommendations@%%h
+Restart=always
+RestartSec=5
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true

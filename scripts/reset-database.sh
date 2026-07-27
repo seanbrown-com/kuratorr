@@ -26,6 +26,14 @@ APP_USER=kuratorr
 DB_NAME=kuratorr
 DB_USER=kuratorr
 DB_LOCALE=en_US.UTF-8
+KURATORR_SERVICES=(
+  kuratorr-web
+  kuratorr-worker
+  kuratorr-worker-enrichment
+  kuratorr-worker-recommendations
+  kuratorr-worker-playlists
+  kuratorr-beat
+)
 
 if ! locale -a | grep -Eiq '^en_US\.utf-?8$'; then
   DB_LOCALE=C.UTF-8
@@ -37,10 +45,10 @@ if [[ ! -x "$APP_DIR/.venv/bin/python" ]]; then
 fi
 
 echo "Stopping Kuratorr services..."
-systemctl stop kuratorr-web kuratorr-worker kuratorr-beat
+systemctl stop "${KURATORR_SERVICES[@]}"
 
 restart_services() {
-  systemctl start kuratorr-web kuratorr-worker kuratorr-beat
+  systemctl start "${KURATORR_SERVICES[@]}"
 }
 trap restart_services EXIT
 

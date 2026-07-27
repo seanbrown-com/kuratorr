@@ -39,7 +39,78 @@ services:
     restart: unless-stopped
     env_file: ${ENV_FILE:-.env}
     environment: {SKIP_MIGRATIONS: "true"}
-    command: ["celery", "-A", "config", "worker", "--loglevel=INFO", "--concurrency=2"]
+    command:
+      [
+        "celery",
+        "-A",
+        "config",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=1",
+        "--queues=control,celery",
+        "--hostname=control@%h",
+      ]
+    volumes:
+      - ${MUSIC_MOUNT_HOST}:/music:ro
+      - ${LIBRARY_BROWSE_MOUNT_HOST:-${MUSIC_MOUNT_HOST}}:/libraries:ro
+      - ${PLAYLIST_MOUNT_HOST}:/playlists
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  worker-enrichment:
+    build: .
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    environment: {SKIP_MIGRATIONS: "true"}
+    command:
+      [
+        "celery",
+        "-A",
+        "config",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=2",
+        "--queues=enrichment",
+        "--hostname=enrichment@%h",
+      ]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  worker-recommendations:
+    build: .
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    environment: {SKIP_MIGRATIONS: "true"}
+    command:
+      [
+        "celery",
+        "-A",
+        "config",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=1",
+        "--queues=recommendations",
+        "--hostname=recommendations@%h",
+      ]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  worker-playlists:
+    build: .
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    environment: {SKIP_MIGRATIONS: "true"}
+    command:
+      [
+        "celery",
+        "-A",
+        "config",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=1",
+        "--queues=playlists",
+        "--hostname=playlists@%h",
+      ]
     volumes:
       - ${MUSIC_MOUNT_HOST}:/music:ro
       - ${LIBRARY_BROWSE_MOUNT_HOST:-${MUSIC_MOUNT_HOST}}:/libraries:ro

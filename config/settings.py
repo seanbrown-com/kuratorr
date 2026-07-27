@@ -103,6 +103,19 @@ CELERY_RESULT_BACKEND = "django-db"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 3600
 CELERY_TASK_SOFT_TIME_LIMIT = 3300
+CELERY_TASK_DEFAULT_PRIORITY = 0
+CELERY_TASK_DEFAULT_QUEUE = "control"
+CELERY_BROKER_TRANSPORT_OPTIONS = {"queue_order_strategy": "priority"}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ROUTES = {
+    "library.tasks.*": {"queue": "control"},
+    "enrichment.tasks.enrich_library_task": {"queue": "control"},
+    "enrichment.tasks.run_pending_enrichments": {"queue": "control"},
+    "enrichment.tasks.enrich_artist_task": {"queue": "enrichment"},
+    "enrichment.tasks.refresh_noteworthy_decisions_task": {"queue": "enrichment"},
+    "enrichment.tasks.refresh_artist_recommendations_task": {"queue": "recommendations"},
+    "playlists.tasks.*": {"queue": "playlists"},
+}
 SCAN_TASK_TIME_LIMIT = int(os.getenv("SCAN_TASK_TIME_LIMIT", "86400"))
 SCAN_TASK_SOFT_TIME_LIMIT = int(os.getenv("SCAN_TASK_SOFT_TIME_LIMIT", "82800"))
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
