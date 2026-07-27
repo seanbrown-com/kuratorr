@@ -565,16 +565,15 @@ def test_settings_page_manages_playlist_output_directories(client, django_user_m
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
-def test_playlist_output_permission_error_is_shown_instead_of_500(
-    client, django_user_model, monkeypatch
-):
+def test_playlist_output_save_does_not_touch_the_filesystem(client, django_user_model, monkeypatch):
     user = django_user_model.objects.create_superuser(
         "admin", password="Very-Long-Test-Passphrase!"
     )
     client.force_login(user)
     monkeypatch.setattr(
         "playlists.forms.Path.mkdir",
-        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError(13, "Permission denied")),
+        lambda *args, **kwargs: pytest.fail("settings save attempted to create the output path"),
+        raising=False,
     )
 
     response = client.post(
@@ -586,6 +585,27 @@ def test_playlist_output_permission_error_is_shown_instead_of_500(
         },
     )
 
+    assert response.status_code == 302
+    assert PlaylistOutputRoot.load().path == "/mnt/music/playlists"
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_playlist_output_path_must_be_absolute(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+
+    response = client.post(
+        reverse("settings"),
+        {
+            "action": "save_playlist_output",
+            "path": "relative/playlists",
+            "enabled": "on",
+        },
+    )
+
     assert response.status_code == 200
-    assert "Kuratorr cannot create or write to /mnt/music/playlists" in response.content.decode()
+    assert "playlist output path must be absolute" in response.content.decode().lower()
     assert not PlaylistOutputRoot.objects.exists()
