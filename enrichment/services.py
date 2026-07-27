@@ -29,7 +29,7 @@ from enrichment.models import (
     SourceRecord,
 )
 from library.models import Album, Artist, Genre, ServiceSettings
-from library.services import normalize_text
+from library.services import has_feature_credit, normalize_text, primary_artist_name
 
 
 def _score(left, right):
@@ -38,6 +38,7 @@ def _score(left, right):
 
 def _title_key(value):
     """Normalize a song/album title while ignoring common edition suffixes."""
+    value = primary_artist_name(value)
     value = re.sub(
         r"\s*[\[(][^\])]*(?:remaster(?:ed)?|version|edit|mix|mono|stereo|live)[^\])]*[\])]\s*$",
         "",
@@ -1025,13 +1026,19 @@ def refresh_album_genres(artist=None):
 @transaction.atomic
 def refresh_artist_recommendations():
     """Rank non-library artists by distinct local artists linking to them."""
-    local_artists = {artist.normalized_name: artist for artist in Artist.objects.all()}
+    local_artists = {
+        artist.normalized_name: artist
+        for artist in Artist.objects.all()
+        if not has_feature_credit(artist.name)
+    }
     buckets = {}
     reconciled = []
     evidence_items = RelatedArtistEvidence.objects.exclude(
         decision=Decision.REJECTED
     ).select_related("artist")
     for evidence in evidence_items:
+        if has_feature_credit(evidence.related_artist_name):
+            continue
         normalized = normalize_text(evidence.related_artist_name)
         if not normalized or normalized == evidence.artist.normalized_name:
             continue

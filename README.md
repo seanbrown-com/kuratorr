@@ -91,9 +91,12 @@ eligible for automatic enrichment again.
 3. A complete scan stops after importing local tags and filesystem metadata; enrichment is started manually from the dashboard.
 4. Manual library enrichment queues one child job per available artist. Each source stores its response separately, proposes entity matches, and records noteworthy evidence while the parent job tracks child completion.
 5. Whole-title matches at or above the configured acceptance threshold are accepted; only close ambiguous matches enter Review, while unrelated titles are rejected automatically.
-6. Album genres are selected from accepted source evidence unless manually overridden.
-7. Playlist generation uses accepted noteworthy evidence and accepted related-artist evidence.
-8. Database playlists may optionally be written as M3U files to each enabled output directory.
+6. Featured-artist credits are assigned to the lead catalog artist and excluded
+   from recommendations; the complete song title remains available for noteworthy
+   matching and playlists.
+7. Album genres are selected from accepted source evidence unless manually overridden.
+8. Playlist generation uses accepted noteworthy evidence and accepted related-artist evidence.
+9. Database playlists may optionally be written as M3U files to each enabled output directory.
 
 Control/scanning, enrichment, recommendations, and playlist work use independent
 Celery queues. A provider backlog cannot prevent a recommendation or playlist job

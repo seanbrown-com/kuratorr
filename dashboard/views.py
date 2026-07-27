@@ -55,7 +55,7 @@ def health(request):
 def dashboard(request):
     reconcile_stale_jobs()
     context = {
-        "artist_count": Artist.objects.count(),
+        "artist_count": Artist.objects.filter(tracks__is_available=True).distinct().count(),
         "album_count": Album.objects.count(),
         "track_count": Track.objects.filter(is_available=True).count(),
         "playlist_count": Playlist.objects.filter(deleted_at=None).count(),

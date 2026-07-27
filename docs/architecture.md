@@ -22,14 +22,23 @@
 1. Kuratorr stores only the normalized file metadata used by the application. Source audio files remain authoritative and can be rescanned if the application needs additional fields later; unused tags and embedded artwork are not persisted.
 2. External source payloads are never merged destructively.
 3. Normalized names exist only to search and match; display values remain intact.
-4. Track matching compares whole normalized titles after removing common edition suffixes. A score at or above the configurable auto-accept threshold (default 0.95) is accepted, scores from the Review threshold (default 0.85) enter Review, and lower scores are rejected automatically.
-5. YouTube additionally requires an official-video confidence threshold and excludes known non-video formats.
-6. Accepted evidence contributes to playlists. Pending/rejected evidence does not.
+4. Local artist credits ending in `feat.`, `ft.`, or `featuring` are assigned to
+   the lead artist. Collaborative credit strings are not surfaced as catalog
+   artists or recommendations. Track display titles retain their complete
+   featured-artist credit.
+5. Track matching compares whole normalized titles after removing common edition
+   and featured-artist suffixes. The stored title is not changed, allowing a
+   featured song to receive noteworthy evidence and appear in playlists. A score
+   at or above the configurable auto-accept threshold (default 0.95) is accepted,
+   scores from the Review threshold (default 0.85) enter Review, and lower scores
+   are rejected automatically.
+6. YouTube additionally requires an official-video confidence threshold and excludes known non-video formats.
+7. Accepted evidence contributes to playlists. Pending/rejected evidence does not.
 
 Wikipedia table/list parsing removes rendered citation nodes and trailing reference markers before storing a candidate title. During reconciliation, title confidence is recalculated from the current external and local titles rather than retaining a stale historical minimum; provider/artist identity confidence is evaluated separately.
 
 MusicBrainz album release groups that do not match a local album are materialized separately as `MissingAlbum` records. The Missing page shows only releases that can be associated with at least one source-qualified noteworthy external track and supports release-type filtering. Records are reconciled whenever MusicBrainz enrichment runs again; singles and other non-album release groups are not presented as missing albums.
-7. Manual album genres take precedence over automatic genre selection.
+8. Manual album genres take precedence over automatic genre selection.
 
 ## Scan semantics
 

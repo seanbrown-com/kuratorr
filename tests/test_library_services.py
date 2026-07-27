@@ -8,16 +8,32 @@ from enrichment.job_control import fail_job_for_task
 from enrichment.models import JobRun
 from library.models import AlbumGenre, ScanIssue, Track
 from library.services import (
+    has_feature_credit,
     import_file,
     normalize_text,
     parse_number,
     parse_year,
+    primary_artist_name,
     scan_library_root,
 )
 
 
 def test_normalize_text_removes_punctuation_and_version_noise():
     assert normalize_text("Café — Change (Remastered 2020)") == "cafe change"
+
+
+@pytest.mark.parametrize(
+    ("credit", "primary"),
+    [
+        ("Massive Attack feat. Tracey Thorn", "Massive Attack"),
+        ("Clutch featuring Randy Blythe & Neil Fallon", "Clutch"),
+        ("Deftones (ft. Maynard James Keenan)", "Deftones"),
+        ("Earth, Wind & Fire", "Earth, Wind & Fire"),
+    ],
+)
+def test_primary_artist_name_removes_only_feature_credits(credit, primary):
+    assert primary_artist_name(credit) == primary
+    assert has_feature_credit(credit) is (credit != primary)
 
 
 @pytest.mark.parametrize(("value", "expected"), [("03/12", 3), ("Disc 2", 2), (None, None)])
@@ -60,6 +76,34 @@ def test_import_file_creates_entities_and_genre(root, tmp_path):
     assert list(
         AlbumGenre.objects.filter(album=track.album).values_list("genre__name", flat=True)
     ) == ["Alternative Metal", "Nu Metal"]
+
+
+@pytest.mark.django_db
+def test_import_file_assigns_featured_song_to_primary_artist(root, tmp_path):
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"fake")
+    metadata = {
+        "title": "Passenger (feat. Maynard James Keenan)",
+        "artist": "Deftones feat. Maynard James Keenan",
+        "album_artist": "Deftones feat. Maynard James Keenan",
+        "album": "White Pony",
+        "year": 2000,
+        "track_number": 1,
+        "disc_number": 1,
+        "duration_seconds": 240,
+        "bitrate": 320000,
+        "sample_rate": 44100,
+        "channels": 2,
+        "genres": [],
+    }
+
+    with patch("library.services.read_audio_metadata", return_value=metadata):
+        track, _ = import_file(root, path)
+
+    assert track.artist.name == "Deftones"
+    assert track.album.artist.name == "Deftones"
+    assert track.title == "Passenger (feat. Maynard James Keenan)"
+    assert not track.artist.__class__.objects.filter(name__icontains="feat").exists()
 
 
 @pytest.mark.django_db

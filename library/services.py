@@ -12,12 +12,29 @@ from enrichment.models import AlbumGenreEvidence, Decision, Source
 from library.models import Album, AlbumGenre, Artist, Genre, ScanIssue, Track
 
 SUPPORTED_EXTENSIONS = {".mp3": Track.AudioFormat.MP3, ".flac": Track.AudioFormat.FLAC}
+FEATURE_CREDIT_RE = re.compile(
+    r"(?:\s+|[\(\[])(?:feat(?:uring)?|ft)\.?\s+",
+    flags=re.IGNORECASE,
+)
 
 
 def normalize_text(value):
     value = unicodedata.normalize("NFKD", value or "").casefold()
     value = re.sub(r"\([^)]*(remaster|version|edit|mix)[^)]*\)", "", value)
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def has_feature_credit(value):
+    return bool(FEATURE_CREDIT_RE.search(value or ""))
+
+
+def primary_artist_name(value):
+    """Return the lead artist without a trailing featured-artist credit."""
+    value = (value or "").strip()
+    match = FEATURE_CREDIT_RE.search(value)
+    if not match:
+        return value
+    return value[: match.start()].rstrip(" ,;:-([")
 
 
 def parse_number(value):
@@ -93,6 +110,7 @@ def read_audio_metadata(path):
 
 
 def _artist(name):
+    name = primary_artist_name(name) or name.strip()
     normalized = normalize_text(name)
     artist, _ = Artist.objects.get_or_create(
         normalized_name=normalized, defaults={"name": name, "sort_name": name}
@@ -137,6 +155,8 @@ def import_file(root, path):
         existing
         and existing.file_modified_ns == stat.st_mtime_ns
         and existing.file_size == stat.st_size
+        and not has_feature_credit(existing.artist.name)
+        and not has_feature_credit(existing.album.artist.name)
     ):
         if not existing.is_available:
             existing.is_available = True

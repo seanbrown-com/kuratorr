@@ -500,6 +500,54 @@ def test_recommendations_rank_absent_artists_by_distinct_library_links(artist):
 
 
 @pytest.mark.django_db
+def test_recommendations_exclude_featured_artist_credits(artist):
+    RelatedArtistEvidence.objects.create(
+        artist=artist,
+        related_artist_name="Failure feat. Hayley Williams & Chino Moreno",
+        relationship_type=RelatedArtistEvidence.RelationshipType.COLLABORATOR,
+        source=Source.WIKIPEDIA,
+        confidence=Decimal("0.8"),
+        decision=Decision.PENDING,
+    )
+    RelatedArtistEvidence.objects.create(
+        artist=artist,
+        related_artist_name="Hum",
+        relationship_type=RelatedArtistEvidence.RelationshipType.SIMILAR,
+        source=Source.LASTFM,
+        confidence=Decimal("0.8"),
+        decision=Decision.PENDING,
+    )
+
+    assert refresh_artist_recommendations()["recommendations"] == 1
+    assert list(ArtistRecommendation.objects.values_list("name", flat=True)) == ["Hum"]
+
+
+@pytest.mark.django_db
+def test_featured_song_title_can_match_and_be_noteworthy(track, artist, monkeypatch):
+    from enrichment.services import enrich_lastfm
+
+    track.title = "Passenger (feat. Maynard James Keenan)"
+    track.normalized_title = normalize_text(track.title)
+    track.save(update_fields=["title", "normalized_title"])
+
+    class FakeLastFm:
+        def artist_top_tracks(self, name, limit):
+            return [{"name": "Passenger", "playcount": "5000", "url": ""}]
+
+        def similar_artists(self, name, limit=30):
+            return []
+
+    monkeypatch.setattr("enrichment.services.LastFmClient", FakeLastFm)
+    enrich_lastfm(artist)
+
+    evidence = NoteworthyEvidence.objects.get(
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP
+    )
+    assert evidence.track == track
+    assert evidence.decision == Decision.ACCEPTED
+
+
+@pytest.mark.django_db
 def test_api_client_retries_transient_tls_failures(monkeypatch):
     client = BaseClient()
 
