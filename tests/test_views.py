@@ -561,3 +561,31 @@ def test_settings_page_manages_playlist_output_directories(client, django_user_m
     assert response.status_code == 302
     assert PlaylistOutputRoot.objects.count() == 1
     assert PlaylistOutputRoot.load().path == str(replacement)
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_playlist_output_permission_error_is_shown_instead_of_500(
+    client, django_user_model, monkeypatch
+):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+    monkeypatch.setattr(
+        "playlists.forms.Path.mkdir",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError(13, "Permission denied")),
+    )
+
+    response = client.post(
+        reverse("settings"),
+        {
+            "action": "save_playlist_output",
+            "path": "/mnt/music/playlists",
+            "enabled": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Kuratorr cannot create or write to /mnt/music/playlists" in response.content.decode()
+    assert not PlaylistOutputRoot.objects.exists()
