@@ -315,6 +315,112 @@ def test_wikipedia_enrichment_reads_singles_from_linked_discography(root, monkey
 
 
 @pytest.mark.django_db
+def test_wikipedia_keeps_previous_evidence_when_discography_fetch_is_rate_limited(
+    artist, monkeypatch
+):
+    class InitialWikipedia:
+        def page_html(self, title):
+            return {
+                "pageid": 10,
+                "title": artist.name,
+                "text": """
+                  <table class="infobox"><tr><th>Origin</th><td>Sacramento</td></tr></table>
+                  <h2>Singles</h2>
+                  <table><tr><th>Title</th></tr><tr><td>"Existing Single"</td></tr></table>
+                """,
+            }
+
+        def find_page(self, query):
+            return []
+
+    monkeypatch.setattr("enrichment.services.WikipediaClient", InitialWikipedia)
+    enrich_wikipedia(artist)
+    assert (
+        NoteworthyEvidence.objects.filter(
+            artist=artist,
+            evidence_type=NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+        ).count()
+        == 1
+    )
+
+    class RateLimitedWikipedia:
+        def page_html(self, title):
+            if title == artist.name:
+                return {
+                    "pageid": 10,
+                    "title": artist.name,
+                    "text": """
+                      <table class="infobox">
+                        <tr><th>Origin</th><td>Sacramento</td></tr>
+                      </table>
+                      <p><a href="/wiki/Deftones_discography"
+                            title="Deftones discography">Discography</a></p>
+                    """,
+                }
+            raise RateLimited("wikipedia", 60, "Wikipedia is cooling down")
+
+        def find_page(self, query):
+            return []
+
+    monkeypatch.setattr("enrichment.services.WikipediaClient", RateLimitedWikipedia)
+
+    with pytest.raises(RateLimited):
+        enrich_wikipedia(artist)
+
+    assert NoteworthyEvidence.objects.filter(
+        artist=artist,
+        evidence_type=NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+        external_track__title="Existing Single",
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_wikipedia_commits_discography_evidence_before_album_rate_limit(
+    artist, album, track, monkeypatch
+):
+    class RateLimitedAlbumWikipedia:
+        def page_html(self, title):
+            if title == artist.name:
+                return {
+                    "pageid": 20,
+                    "title": artist.name,
+                    "text": f"""
+                      <table class="infobox">
+                        <tr><th>Origin</th><td>Sacramento</td></tr>
+                      </table>
+                      <h2>Singles</h2>
+                      <table>
+                        <tr><th>Title</th><th>Year</th><th>Album</th></tr>
+                        <tr><td>"{track.title}"</td><td>{album.year}</td>
+                            <td>{album.title}</td></tr>
+                      </table>
+                    """,
+                }
+            raise RateLimited("wikipedia", 60, "Wikipedia is cooling down")
+
+        def find_page(self, query):
+            return [
+                {
+                    "title": f"{album.title} (album)",
+                    "snippet": f"album by {artist.name}",
+                }
+            ]
+
+    monkeypatch.setattr("enrichment.services.WikipediaClient", RateLimitedAlbumWikipedia)
+
+    with pytest.raises(RateLimited):
+        enrich_wikipedia(artist)
+
+    evidence = NoteworthyEvidence.objects.get(
+        artist=artist,
+        evidence_type=NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+        external_track__title=track.title,
+    )
+    assert evidence.track == track
+    assert evidence.decision == Decision.ACCEPTED
+
+
+@pytest.mark.django_db
 def test_duplicate_track_title_prefers_source_album_then_closest_year(artist, root):
     older_album = Album.objects.create(
         artist=artist,

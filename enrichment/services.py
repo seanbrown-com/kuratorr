@@ -799,7 +799,6 @@ def _discography_title(html):
     return None
 
 
-@transaction.atomic
 def enrich_wikipedia(artist):
     client = WikipediaClient()
     parsed = client.page_html(artist.name)
@@ -823,64 +822,73 @@ def enrich_wikipedia(artist):
             return {"tracks": 0, "warning": "No confident Wikipedia page match"}
         title = candidate["title"]
         parsed = client.page_html(title)
-    page_record = _record(
-        Source.WIKIPEDIA,
-        "artist_page",
-        str(parsed.get("pageid") or title),
-        parsed,
-        wikipedia_url(title),
-    )
-    ExternalIdentifier.objects.update_or_create(
-        source=Source.WIKIPEDIA,
-        entity_kind="artist",
-        external_id=str(parsed.get("pageid") or title),
-        defaults={
-            "artist": artist,
-            "source_record": page_record,
-            "confidence": confidence,
-            "decision": Decision.ACCEPTED if confidence >= Decimal("0.85") else Decision.PENDING,
-        },
-    )
     html = parsed.get("text", "")
-    NoteworthyEvidence.objects.filter(
-        artist=artist,
-        evidence_type__in=[
-            NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
-            NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
-        ],
-    ).delete()
     candidates = _section_candidates(html)
     discography_title = _discography_title(html)
+    discography = None
     if discography_title and normalize_text(discography_title) != normalize_text(title):
         discography = client.page_html(discography_title)
-        _record(
-            Source.WIKIPEDIA,
-            "discography_page",
-            str(discography.get("pageid") or discography_title),
-            discography,
-            wikipedia_url(discography_title),
-        )
         candidates.extend(_section_candidates(discography.get("text", "")))
     candidates = _merge_candidate_context(candidates)
-    for kind, song_title, year, album_title in candidates:
-        external_id = f"{parsed.get('pageid') or title}:{kind}:{normalize_text(song_title)}"
-        record = _record(
+
+    # Fetch the artist and linked discography pages before replacing existing
+    # evidence. A provider error must leave the last successful snapshot intact.
+    with transaction.atomic():
+        page_record = _record(
             Source.WIKIPEDIA,
-            "track_mention",
-            external_id,
-            {"title": song_title, "year": year, "kind": kind, "page": title},
+            "artist_page",
+            str(parsed.get("pageid") or title),
+            parsed,
             wikipedia_url(title),
         )
-        _external_track(
-            Source.WIKIPEDIA,
-            record,
-            artist,
-            song_title,
-            kind,
-            year=year,
-            album_title=album_title,
-            source_confidence=confidence,
+        ExternalIdentifier.objects.update_or_create(
+            source=Source.WIKIPEDIA,
+            entity_kind="artist",
+            external_id=str(parsed.get("pageid") or title),
+            defaults={
+                "artist": artist,
+                "source_record": page_record,
+                "confidence": confidence,
+                "decision": Decision.ACCEPTED
+                if confidence >= Decimal("0.85")
+                else Decision.PENDING,
+            },
         )
+        if discography is not None:
+            _record(
+                Source.WIKIPEDIA,
+                "discography_page",
+                str(discography.get("pageid") or discography_title),
+                discography,
+                wikipedia_url(discography_title),
+            )
+        NoteworthyEvidence.objects.filter(
+            artist=artist,
+            evidence_type__in=[
+                NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+                NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
+            ],
+        ).delete()
+        for kind, song_title, year, album_title in candidates:
+            external_id = f"{parsed.get('pageid') or title}:{kind}:{normalize_text(song_title)}"
+            record = _record(
+                Source.WIKIPEDIA,
+                "track_mention",
+                external_id,
+                {"title": song_title, "year": year, "kind": kind, "page": title},
+                wikipedia_url(title),
+            )
+            _external_track(
+                Source.WIKIPEDIA,
+                record,
+                artist,
+                song_title,
+                kind,
+                year=year,
+                album_title=album_title,
+                source_confidence=confidence,
+            )
+
     infobox = _wikipedia_infobox(html)
     related_count = 0
     for key in ("associated acts", "spinoffs", "spin offs"):
@@ -908,75 +916,80 @@ def enrich_wikipedia(artist):
         )
         if not album_candidate or album_confidence < Decimal("0.82"):
             continue
-        ExternalIdentifier.objects.filter(
-            source=Source.WIKIPEDIA, entity_kind="album", album=album
-        ).delete()
-        AlbumGenreEvidence.objects.filter(album=album, source=Source.WIKIPEDIA).delete()
         album_title = album_candidate["title"]
         album_page = client.page_html(album_title)
-        album_record = _record(
-            Source.WIKIPEDIA,
-            "album_page",
-            str(album_page.get("pageid") or album_title),
-            album_page,
-            wikipedia_url(album_title),
-        )
-        ExternalIdentifier.objects.update_or_create(
-            source=Source.WIKIPEDIA,
-            entity_kind="album",
-            external_id=str(album_page.get("pageid") or album_title),
-            defaults={
-                "album": album,
-                "source_record": album_record,
-                "confidence": album_confidence,
-                "decision": Decision.ACCEPTED
-                if album_confidence >= Decimal("0.8")
-                else Decision.PENDING,
-            },
-        )
         album_info = _wikipedia_infobox(album_page.get("text", ""))
-        for song_title in _album_infobox_singles(album_page.get("text", "")):
-            kind = NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE
-            external_id = (
-                f"{album_page.get('pageid') or album_title}:{kind}:{normalize_text(song_title)}"
-            )
-            record = _record(
+        album_singles = _album_infobox_singles(album_page.get("text", ""))
+
+        # Treat each album page as its own replaceable snapshot so a later
+        # network failure cannot roll back the artist/discography evidence.
+        with transaction.atomic():
+            ExternalIdentifier.objects.filter(
+                source=Source.WIKIPEDIA, entity_kind="album", album=album
+            ).delete()
+            AlbumGenreEvidence.objects.filter(album=album, source=Source.WIKIPEDIA).delete()
+            album_record = _record(
                 Source.WIKIPEDIA,
-                "track_mention",
-                external_id,
-                {"title": song_title, "kind": kind, "page": album_title},
+                "album_page",
+                str(album_page.get("pageid") or album_title),
+                album_page,
                 wikipedia_url(album_title),
             )
-            _external_track(
-                Source.WIKIPEDIA,
-                record,
-                artist,
-                song_title,
-                kind,
-                year=album.year,
-                album_title=album.title,
-                source_confidence=album_confidence,
-                notes=f"Listed in the singles infobox for {album_title}.",
-            )
-            candidates.append((kind, song_title, album.year, album.title))
-        for genre_name in album_info.get("genre", []) + album_info.get("genres", []):
-            normalized = normalize_text(genre_name)
-            if not normalized:
-                continue
-            genre, _ = Genre.objects.get_or_create(
-                normalized_name=normalized, defaults={"name": genre_name}
-            )
-            AlbumGenreEvidence.objects.update_or_create(
-                album=album,
-                genre=genre,
+            ExternalIdentifier.objects.update_or_create(
                 source=Source.WIKIPEDIA,
+                entity_kind="album",
+                external_id=str(album_page.get("pageid") or album_title),
                 defaults={
+                    "album": album,
                     "source_record": album_record,
-                    "confidence": Decimal("0.75"),
-                    "decision": Decision.ACCEPTED,
+                    "confidence": album_confidence,
+                    "decision": Decision.ACCEPTED
+                    if album_confidence >= Decimal("0.8")
+                    else Decision.PENDING,
                 },
             )
-            album_genres += 1
+            for song_title in album_singles:
+                kind = NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE
+                external_id = (
+                    f"{album_page.get('pageid') or album_title}:{kind}:{normalize_text(song_title)}"
+                )
+                record = _record(
+                    Source.WIKIPEDIA,
+                    "track_mention",
+                    external_id,
+                    {"title": song_title, "kind": kind, "page": album_title},
+                    wikipedia_url(album_title),
+                )
+                _external_track(
+                    Source.WIKIPEDIA,
+                    record,
+                    artist,
+                    song_title,
+                    kind,
+                    year=album.year,
+                    album_title=album.title,
+                    source_confidence=album_confidence,
+                    notes=f"Listed in the singles infobox for {album_title}.",
+                )
+                candidates.append((kind, song_title, album.year, album.title))
+            for genre_name in album_info.get("genre", []) + album_info.get("genres", []):
+                normalized = normalize_text(genre_name)
+                if not normalized:
+                    continue
+                genre, _ = Genre.objects.get_or_create(
+                    normalized_name=normalized, defaults={"name": genre_name}
+                )
+                AlbumGenreEvidence.objects.update_or_create(
+                    album=album,
+                    genre=genre,
+                    source=Source.WIKIPEDIA,
+                    defaults={
+                        "source_record": album_record,
+                        "confidence": Decimal("0.75"),
+                        "decision": Decision.ACCEPTED,
+                    },
+                )
+                album_genres += 1
     return {
         "tracks": len(candidates),
         "album_genres": album_genres,
