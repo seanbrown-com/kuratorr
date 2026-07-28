@@ -122,7 +122,8 @@ def review_evidence(request, pk, decision):
         return redirect("review-queue")
     evidence = get_object_or_404(NoteworthyEvidence, pk=pk)
     evidence.decision = decision
-    evidence.save(update_fields=["decision", "updated_at"])
+    evidence.decision_is_manual = True
+    evidence.save(update_fields=["decision", "decision_is_manual", "updated_at"])
     if evidence.external_track:
         evidence.external_track.match_decision = decision
         evidence.external_track.save(update_fields=["match_decision", "updated_at"])

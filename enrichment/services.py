@@ -208,7 +208,7 @@ def _external_track(source, record, artist, title, evidence_type, **data):
             "match_decision": evidence_decision,
         },
     )
-    NoteworthyEvidence.objects.update_or_create(
+    evidence, created = NoteworthyEvidence.objects.get_or_create(
         external_track=external,
         evidence_type=evidence_type,
         defaults={
@@ -219,6 +219,27 @@ def _external_track(source, record, artist, title, evidence_type, **data):
             "notes": data.get("notes", ""),
         },
     )
+    if not created:
+        if evidence.decision_is_manual:
+            external.matched_track = evidence.track
+            external.match_decision = evidence.decision
+            external.save(update_fields=["matched_track", "match_decision", "updated_at"])
+        else:
+            evidence.artist = artist
+            evidence.track = matched
+            evidence.confidence = evidence_confidence
+            evidence.decision = evidence_decision
+            evidence.notes = data.get("notes", "")
+            evidence.save(
+                update_fields=[
+                    "artist",
+                    "track",
+                    "confidence",
+                    "decision",
+                    "notes",
+                    "updated_at",
+                ]
+            )
     return external
 
 
@@ -299,7 +320,9 @@ def enrich_spotify(artist):
         : settings.spotify_max_tracks
     ]
     NoteworthyEvidence.objects.filter(
-        artist=artist, evidence_type=NoteworthyEvidence.EvidenceType.SPOTIFY_TOP
+        artist=artist,
+        evidence_type=NoteworthyEvidence.EvidenceType.SPOTIFY_TOP,
+        decision_is_manual=False,
     ).delete()
     for rank, item in enumerate(tracks, 1):
         record = _record(
@@ -333,7 +356,9 @@ def enrich_lastfm(artist):
     client = LastFmClient()
     tracks = client.artist_top_tracks(artist.name, settings.lastfm_max_tracks)
     NoteworthyEvidence.objects.filter(
-        artist=artist, evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP
+        artist=artist,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        decision_is_manual=False,
     ).delete()
     kept = 0
     for rank, item in enumerate(tracks, 1):
@@ -414,6 +439,7 @@ def enrich_musicbrainz(artist):
     NoteworthyEvidence.objects.filter(
         artist=artist,
         evidence_type=NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE,
+        decision_is_manual=False,
     ).delete()
     MissingAlbum.objects.filter(artist=artist, source=Source.MUSICBRAINZ).delete()
     for release in client.release_groups(mbid):
@@ -868,6 +894,7 @@ def enrich_wikipedia(artist):
                 NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
                 NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
             ],
+            decision_is_manual=False,
         ).delete()
         for kind, song_title, year, album_title in candidates:
             external_id = f"{parsed.get('pageid') or title}:{kind}:{normalize_text(song_title)}"
@@ -1053,11 +1080,14 @@ def enrich_youtube(artist):
         evidence = external.evidence.get(
             evidence_type=NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL
         )
+        if evidence.decision_is_manual:
+            kept += 1
+            continue
         evidence.confidence = min(evidence.confidence, confidence)
         evidence.decision = (
             Decision.ACCEPTED
             if evidence.track
-            and confidence >= settings.youtube_auto_accept_confidence
+            and confidence >= settings.track_match_auto_accept_threshold
             and external.match_confidence >= settings.track_match_auto_accept_threshold
             else external.match_decision
         )
@@ -1067,23 +1097,28 @@ def enrich_youtube(artist):
     return {"videos": kept}
 
 
-@transaction.atomic
-def refresh_noteworthy_decisions(artist=None):
+def refresh_noteworthy_decisions(artist=None, cancellation_check=None):
     """Reapply automatic source rules to both new and previously stored evidence."""
     settings = ServiceSettings.load()
-    evidence_items = NoteworthyEvidence.objects.exclude(
-        evidence_type=NoteworthyEvidence.EvidenceType.MANUAL
-    ).select_related("artist", "external_track__source_record", "track")
+    evidence_items = (
+        NoteworthyEvidence.objects.filter(decision_is_manual=False)
+        .exclude(evidence_type=NoteworthyEvidence.EvidenceType.MANUAL)
+        .select_related("artist", "external_track__source_record", "track")
+    )
     if artist:
         evidence_items = evidence_items.filter(artist=artist)
     accepted = 0
     rejected = 0
     pending = 0
     changed = []
+    changed_external = {}
     tracks_by_artist = {}
     source_confidence_cache = {}
     now = timezone.now()
     evidence_items = list(evidence_items)
+    total = len(evidence_items)
+    if cancellation_check:
+        cancellation_check(current=0, total=total)
     track_context = {}
     context_priority = {
         NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE: 3,
@@ -1102,7 +1137,9 @@ def refresh_noteworthy_decisions(artist=None):
                 external.album_title,
                 external.year,
             )
-    for evidence in evidence_items:
+    for index, evidence in enumerate(evidence_items, 1):
+        if cancellation_check and (index == 1 or index % 50 == 0):
+            cancellation_check(current=index - 1, total=total)
         external = evidence.external_track
         match_decision = Decision.REJECTED
         if external:
@@ -1177,7 +1214,7 @@ def refresh_noteworthy_decisions(artist=None):
         elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL:
             payload = external.source_record.payload if external else {}
             confidence = _youtube_confidence(payload, evidence.artist)
-            qualifies = confidence >= settings.youtube_auto_accept_confidence
+            qualifies = confidence >= settings.track_match_auto_accept_threshold
             reason = "Requires an explicit official music video on the artist or VEVO channel."
 
         if match_decision == Decision.REJECTED:
@@ -1194,21 +1231,27 @@ def refresh_noteworthy_decisions(artist=None):
             rejected += 1
         if external:
             external.match_decision = evidence.decision
-            external.save(
-                update_fields=[
-                    "matched_track",
-                    "title",
-                    "match_confidence",
-                    "match_decision",
-                    "updated_at",
-                ]
-            )
+            changed_external[external.pk] = external
         evidence.notes = reason
         evidence.updated_at = now
         changed.append(evidence)
-    NoteworthyEvidence.objects.bulk_update(
-        changed, ["track", "confidence", "decision", "notes", "updated_at"], batch_size=250
-    )
+    with transaction.atomic():
+        if cancellation_check:
+            cancellation_check(current=total, total=total)
+        ExternalTrack.objects.bulk_update(
+            list(changed_external.values()),
+            [
+                "matched_track",
+                "title",
+                "match_confidence",
+                "match_decision",
+                "updated_at",
+            ],
+            batch_size=250,
+        )
+        NoteworthyEvidence.objects.bulk_update(
+            changed, ["track", "confidence", "decision", "notes", "updated_at"], batch_size=250
+        )
     return {"accepted": accepted, "rejected": rejected, "pending": pending}
 
 

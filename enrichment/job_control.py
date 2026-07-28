@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from celery import current_app
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -117,6 +117,48 @@ def cancel_job(job):
         if item.celery_task_id:
             current_app.control.revoke(item.celery_task_id, terminate=False)
     return len(jobs)
+
+
+def replace_active_job(job_type, *, requested_manually=False):
+    """Cancel the active job of this type and atomically create its replacement."""
+    for attempt in range(3):
+        revoked_task_ids = []
+        try:
+            with transaction.atomic():
+                active = list(
+                    JobRun.objects.select_for_update().filter(
+                        job_type=job_type,
+                        status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING],
+                    )
+                )
+                now = timezone.now()
+                for item in active:
+                    item.status = JobRun.Status.CANCELLED
+                    item.finished_at = now
+                    item.heartbeat_at = now
+                    item.error = "Superseded by newer settings."
+                    item.save(
+                        update_fields=[
+                            "status",
+                            "finished_at",
+                            "heartbeat_at",
+                            "error",
+                            "updated_at",
+                        ]
+                    )
+                    if item.celery_task_id:
+                        revoked_task_ids.append(item.celery_task_id)
+                job = JobRun.objects.create(
+                    job_type=job_type,
+                    requested_manually=requested_manually,
+                )
+            for task_id in revoked_task_ids:
+                current_app.control.revoke(task_id, terminate=False)
+            return job
+        except IntegrityError:
+            if attempt == 2:
+                raise
+    raise RuntimeError(f"Could not replace active {job_type} job")
 
 
 def update_parent_from_children(parent_id):

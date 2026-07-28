@@ -10,7 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from dashboard.forms import InitialSetupForm, ServiceSettingsForm
-from enrichment.job_control import cancel_job, reconcile_stale_jobs
+from enrichment.job_control import cancel_job, reconcile_stale_jobs, replace_active_job
 from enrichment.models import (
     ArtistSourceStatus,
     Decision,
@@ -111,7 +111,6 @@ def settings_view(request):
         "spotify_noteworthy_max_rank",
         "lastfm_min_playcount",
         "lastfm_noteworthy_max_rank",
-        "youtube_auto_accept_confidence",
         "track_match_review_threshold",
         "track_match_auto_accept_threshold",
     }
@@ -139,7 +138,10 @@ def settings_view(request):
         if any(
             form.cleaned_data[field] != original_decision_values[field] for field in decision_fields
         ):
-            job = JobRun.objects.create(job_type="refresh_noteworthy_decisions")
+            job = replace_active_job(
+                "refresh_noteworthy_decisions",
+                requested_manually=True,
+            )
             result = refresh_noteworthy_decisions_task.delay(job_id=job.pk)
             job.celery_task_id = result.id
             job.save(update_fields=["celery_task_id", "updated_at"])

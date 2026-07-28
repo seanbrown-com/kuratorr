@@ -55,7 +55,6 @@ class ServiceSettingsForm(forms.ModelForm):
             "max_album_genres",
             "spotify_market",
             "youtube_max_results",
-            "youtube_auto_accept_confidence",
             "track_match_review_threshold",
             "track_match_auto_accept_threshold",
             "http_user_agent",

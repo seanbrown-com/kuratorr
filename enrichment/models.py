@@ -50,6 +50,16 @@ class JobRun(TimestampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job_type"],
+                condition=models.Q(
+                    job_type="refresh_noteworthy_decisions",
+                    status__in=["queued", "running"],
+                ),
+                name="one_active_noteworthy_refresh",
+            )
+        ]
 
 
 class ArtistSourceStatus(TimestampedModel):
@@ -154,6 +164,7 @@ class NoteworthyEvidence(TimestampedModel):
     decision = models.CharField(
         max_length=20, choices=Decision.choices, default=Decision.PENDING, db_index=True
     )
+    decision_is_manual = models.BooleanField(default=False, db_index=True)
     notes = models.TextField(blank=True)
 
     class Meta:

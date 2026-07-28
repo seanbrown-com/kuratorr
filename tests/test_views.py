@@ -480,9 +480,8 @@ def test_settings_page_encrypts_api_credentials(client, django_user_model):
             "max_album_genres": 3,
             "spotify_market": "US",
             "youtube_max_results": 25,
-            "youtube_auto_accept_confidence": "0.900",
             "track_match_review_threshold": "0.850",
-            "track_match_auto_accept_threshold": "0.950",
+            "track_match_auto_accept_threshold": "0.900",
             "http_user_agent": "Kuratorr/1.0 (admin@example.com)",
             "spotify_client_id": "spotify-id",
             "spotify_client_secret": "spotify-secret",
@@ -526,15 +525,115 @@ def test_http_user_agent_save_does_not_run_synchronous_reconciliation(
             "max_album_genres": 3,
             "spotify_market": "US",
             "youtube_max_results": 25,
-            "youtube_auto_accept_confidence": "0.900",
             "track_match_review_threshold": "0.850",
-            "track_match_auto_accept_threshold": "0.950",
+            "track_match_auto_accept_threshold": "0.900",
             "http_user_agent": "Kuratorr/1.0 (admin@example.com)",
         },
     )
 
     assert response.status_code == 302
     assert ServiceSettings.load().http_user_agent == "Kuratorr/1.0 (admin@example.com)"
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_threshold_save_replaces_active_reconciliation_job(client, django_user_model, monkeypatch):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    old_job = JobRun.objects.create(
+        job_type="refresh_noteworthy_decisions",
+        status=JobRun.Status.RUNNING,
+        celery_task_id="old-reconciliation-task",
+    )
+    revoked = []
+    monkeypatch.setattr(
+        "enrichment.job_control.current_app.control.revoke",
+        lambda task_id, terminate=False: revoked.append((task_id, terminate)),
+    )
+    monkeypatch.setattr(
+        "dashboard.views.refresh_noteworthy_decisions_task.delay",
+        lambda job_id: type("Result", (), {"id": f"task-{job_id}"})(),
+    )
+    client.force_login(user)
+
+    payload = {
+        "spotify_max_tracks": 20,
+        "spotify_noteworthy_max_rank": 2,
+        "lastfm_min_playcount": 1000,
+        "lastfm_max_tracks": 50,
+        "lastfm_noteworthy_max_rank": 2,
+        "minimum_playlist_seconds": 3600,
+        "max_album_genres": 3,
+        "spotify_market": "US",
+        "youtube_max_results": 25,
+        "track_match_review_threshold": "0.850",
+        "track_match_auto_accept_threshold": "0.910",
+        "http_user_agent": "",
+    }
+    response = client.post(reverse("settings"), payload)
+
+    assert response.status_code == 302
+    old_job.refresh_from_db()
+    assert old_job.status == JobRun.Status.CANCELLED
+    assert old_job.error == "Superseded by newer settings."
+    assert revoked == [("old-reconciliation-task", False)]
+    active = JobRun.objects.get(
+        job_type="refresh_noteworthy_decisions",
+        status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING],
+    )
+    assert active.celery_task_id == f"task-{active.pk}"
+
+    payload["track_match_auto_accept_threshold"] = "0.920"
+    response = client.post(reverse("settings"), payload)
+
+    assert response.status_code == 302
+    active.refresh_from_db()
+    assert active.status == JobRun.Status.CANCELLED
+    assert (
+        JobRun.objects.filter(
+            job_type="refresh_noteworthy_decisions",
+            status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING],
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_review_decision_is_recorded_as_manual_override(client, django_user_model, artist, track):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    record = SourceRecord.objects.create(
+        source=Source.LASTFM,
+        entity_kind="track",
+        external_id="manual-review-override",
+        fetched_at=timezone.now(),
+    )
+    external = ExternalTrack.objects.create(
+        source_record=record,
+        artist=artist,
+        matched_track=track,
+        artist_name=artist.name,
+        title=track.title,
+    )
+    evidence = NoteworthyEvidence.objects.create(
+        artist=artist,
+        track=track,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        confidence=Decimal("1"),
+        decision=Decision.PENDING,
+    )
+    client.force_login(user)
+
+    response = client.post(reverse("review-evidence", args=[evidence.pk, Decision.REJECTED]))
+
+    assert response.status_code == 302
+    evidence.refresh_from_db()
+    assert evidence.decision == Decision.REJECTED
+    assert evidence.decision_is_manual is True
 
 
 @pytest.mark.django_db

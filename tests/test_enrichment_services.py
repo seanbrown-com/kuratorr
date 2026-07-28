@@ -11,6 +11,7 @@ from enrichment.clients import (
     ProviderNotConfigured,
     RateLimited,
 )
+from enrichment.job_control import JobCancelled
 from enrichment.models import (
     ArtistRecommendation,
     Decision,
@@ -37,7 +38,7 @@ from enrichment.services import (
     refresh_artist_recommendations,
     refresh_noteworthy_decisions,
 )
-from library.models import Album, Artist, Track
+from library.models import Album, Artist, ServiceSettings, Track
 from library.services import normalize_text
 from playlists.services import noteworthy_tracks
 
@@ -67,10 +68,10 @@ def test_track_match_rejects_unrelated_partial_substring(track, artist):
 
 @pytest.mark.django_db
 def test_track_match_sends_only_close_titles_to_review(track, artist):
-    matched, confidence, decision = _match_local_track(artist, "Change in the House of Flys")
+    matched, confidence, decision = _match_local_track(artist, "Change in House of Fire")
 
     assert matched == track
-    assert Decimal("0.85") <= confidence < Decimal("0.95")
+    assert Decimal("0.85") <= confidence < Decimal("0.9")
     assert decision == Decision.PENDING
 
 
@@ -769,6 +770,158 @@ def test_refresh_accepts_exact_titles_instead_of_retaining_stale_confidence(trac
 
 
 @pytest.mark.django_db
+def test_refresh_moves_automatic_decisions_with_global_threshold_and_preserves_manual(
+    track, artist
+):
+    track.title = "Lost in a Fantasy"
+    track.normalized_title = normalize_text(track.title)
+    track.save(update_fields=["title", "normalized_title", "updated_at"])
+    record = SourceRecord.objects.create(
+        source=Source.LASTFM,
+        entity_kind="track",
+        external_id="lastfm-lost-in-fantasy",
+        fetched_at=timezone.now(),
+    )
+    external = ExternalTrack.objects.create(
+        source_record=record,
+        artist=artist,
+        matched_track=track,
+        artist_name=artist.name,
+        title="Lost in Fantasy",
+        rank=1,
+        playcount=10000,
+        match_confidence=Decimal("0.938"),
+        match_decision=Decision.PENDING,
+    )
+    evidence = NoteworthyEvidence.objects.create(
+        artist=artist,
+        track=track,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        confidence=Decimal("0.938"),
+        decision=Decision.PENDING,
+    )
+    settings = ServiceSettings.load()
+    settings.track_match_auto_accept_threshold = Decimal("0.900")
+    settings.save()
+
+    refresh_noteworthy_decisions(artist)
+    evidence.refresh_from_db()
+    assert evidence.confidence == Decimal("0.938")
+    assert evidence.decision == Decision.ACCEPTED
+
+    settings.track_match_auto_accept_threshold = Decimal("0.950")
+    settings.save()
+    refresh_noteworthy_decisions(artist)
+    evidence.refresh_from_db()
+    assert evidence.decision == Decision.PENDING
+
+    evidence.decision = Decision.REJECTED
+    evidence.decision_is_manual = True
+    evidence.save(update_fields=["decision", "decision_is_manual", "updated_at"])
+    settings.track_match_auto_accept_threshold = Decimal("0.900")
+    settings.save()
+
+    assert refresh_noteworthy_decisions(artist) == {
+        "accepted": 0,
+        "rejected": 0,
+        "pending": 0,
+    }
+    evidence.refresh_from_db()
+    assert evidence.decision == Decision.REJECTED
+
+
+@pytest.mark.django_db
+def test_cancelled_refresh_does_not_commit_partial_decisions(track, artist):
+    record = SourceRecord.objects.create(
+        source=Source.LASTFM,
+        entity_kind="track",
+        external_id="cancelled-confidence-refresh",
+        fetched_at=timezone.now(),
+    )
+    external = ExternalTrack.objects.create(
+        source_record=record,
+        artist=artist,
+        matched_track=track,
+        artist_name=artist.name,
+        title=track.title,
+        rank=1,
+        playcount=10000,
+        match_confidence=Decimal("0.500"),
+        match_decision=Decision.PENDING,
+    )
+    evidence = NoteworthyEvidence.objects.create(
+        artist=artist,
+        track=track,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        confidence=Decimal("0.500"),
+        decision=Decision.PENDING,
+    )
+
+    def cancel_before_commit(*, current, total):
+        if current == total:
+            raise JobCancelled("Superseded by newer settings")
+
+    with pytest.raises(JobCancelled):
+        refresh_noteworthy_decisions(
+            artist,
+            cancellation_check=cancel_before_commit,
+        )
+
+    evidence.refresh_from_db()
+    external.refresh_from_db()
+    assert evidence.confidence == Decimal("0.500")
+    assert evidence.decision == Decision.PENDING
+    assert external.match_confidence == Decimal("0.500")
+    assert external.match_decision == Decision.PENDING
+
+
+@pytest.mark.django_db
+def test_review_threshold_moves_automatic_matches_between_rejected_and_pending(track, artist):
+    record = SourceRecord.objects.create(
+        source=Source.LASTFM,
+        entity_kind="track",
+        external_id="review-threshold-match",
+        fetched_at=timezone.now(),
+    )
+    external = ExternalTrack.objects.create(
+        source_record=record,
+        artist=artist,
+        artist_name=artist.name,
+        title="Change in House of Fire",
+        rank=1,
+        playcount=10000,
+        match_confidence=Decimal("0.863"),
+        match_decision=Decision.REJECTED,
+    )
+    evidence = NoteworthyEvidence.objects.create(
+        artist=artist,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        confidence=Decimal("0.863"),
+        decision=Decision.REJECTED,
+    )
+    settings = ServiceSettings.load()
+    settings.track_match_review_threshold = Decimal("0.880")
+    settings.track_match_auto_accept_threshold = Decimal("0.900")
+    settings.save()
+
+    refresh_noteworthy_decisions(artist)
+    evidence.refresh_from_db()
+    assert evidence.decision == Decision.REJECTED
+    assert evidence.track is None
+
+    settings.track_match_review_threshold = Decimal("0.850")
+    settings.save()
+    refresh_noteworthy_decisions(artist)
+    evidence.refresh_from_db()
+    assert evidence.confidence == Decimal("0.863")
+    assert evidence.decision == Decision.PENDING
+    assert evidence.track == track
+
+
+@pytest.mark.django_db
 def test_spotify_ranking_is_stored_as_independent_source_evidence(track, artist, monkeypatch):
     class FakeSpotify:
         def find_artist(self, name):
@@ -912,6 +1065,33 @@ def test_featured_song_title_can_match_and_be_noteworthy(track, artist, monkeypa
     )
     assert evidence.track == track
     assert evidence.decision == Decision.ACCEPTED
+
+
+@pytest.mark.django_db
+def test_lastfm_reenrichment_preserves_manual_review_decision(track, artist, monkeypatch):
+    from enrichment.services import enrich_lastfm
+
+    class FakeLastFm:
+        def artist_top_tracks(self, name, limit):
+            return [{"name": track.title, "playcount": "5000", "url": ""}]
+
+        def similar_artists(self, name, limit=30):
+            return []
+
+    monkeypatch.setattr("enrichment.services.LastFmClient", FakeLastFm)
+    enrich_lastfm(artist)
+    evidence = NoteworthyEvidence.objects.get(
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP
+    )
+    evidence.decision = Decision.REJECTED
+    evidence.decision_is_manual = True
+    evidence.save(update_fields=["decision", "decision_is_manual", "updated_at"])
+
+    enrich_lastfm(artist)
+
+    evidence.refresh_from_db()
+    assert evidence.decision == Decision.REJECTED
+    assert evidence.decision_is_manual is True
 
 
 @pytest.mark.django_db

@@ -27,9 +27,6 @@ class ServiceSettings(TimestampedModel):
     max_album_genres = models.PositiveSmallIntegerField(default=3)
     spotify_market = models.CharField(max_length=2, default="US")
     youtube_max_results = models.PositiveSmallIntegerField(default=25)
-    youtube_auto_accept_confidence = models.DecimalField(
-        max_digits=4, decimal_places=3, default=0.9
-    )
     track_match_review_threshold = models.DecimalField(
         max_digits=4,
         decimal_places=3,
@@ -39,7 +36,7 @@ class ServiceSettings(TimestampedModel):
     track_match_auto_accept_threshold = models.DecimalField(
         max_digits=4,
         decimal_places=3,
-        default=0.950,
+        default=0.900,
         help_text="Minimum whole-title similarity accepted automatically.",
     )
     spotify_client_id_encrypted = models.TextField(blank=True)

@@ -188,7 +188,9 @@ def refresh_noteworthy_decisions_task(self, job_id=None):
     )
     try:
         start_job(job, self.request.id or "")
-        summary = refresh_noteworthy_decisions()
+        summary = refresh_noteworthy_decisions(
+            cancellation_check=lambda **progress: touch_job(job.pk, **progress)
+        )
         finish_job(job, JobRun.Status.SUCCEEDED, summary=summary)
         return summary
     except JobCancelled:
