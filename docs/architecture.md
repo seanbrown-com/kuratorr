@@ -23,9 +23,11 @@
 2. External source payloads are never merged destructively.
 3. Normalized names exist only to search and match; display values remain intact.
 4. Local artist credits ending in `feat.`, `ft.`, or `featuring` are assigned to
-   the lead artist. Collaborative credit strings are not surfaced as catalog
-   artists or recommendations. Track display titles retain their complete
-   featured-artist credit.
+   the lead artist. Both endpoints of related-artist evidence are canonicalized
+   to their lead artist, and duplicate source/type relationships are merged.
+   Collaborative credit strings are not surfaced as catalog artists,
+   recommendations, or recommendation connections. Track display titles retain
+   their complete featured-artist credit.
 5. Track matching compares whole normalized titles after removing common edition
    and featured-artist suffixes. The stored title is not changed, allowing a
    featured song to receive noteworthy evidence and appear in playlists. A score

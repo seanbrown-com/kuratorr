@@ -255,6 +255,36 @@ def _external_track(source, record, artist, title, evidence_type, **data):
     return external
 
 
+def _store_related_artist_evidence(
+    *,
+    artist,
+    raw_name,
+    relationship_type,
+    source,
+    source_record,
+    confidence,
+):
+    """Store a relationship against the lead artist, never a featured credit."""
+    name = primary_artist_name(raw_name)
+    normalized = normalize_text(name)
+    if not normalized or normalized == artist.normalized_name:
+        return False
+    related = Artist.objects.filter(normalized_name=normalized).first()
+    RelatedArtistEvidence.objects.update_or_create(
+        artist=artist,
+        related_artist_name=name,
+        relationship_type=relationship_type,
+        source=source,
+        defaults={
+            "related_artist": related,
+            "source_record": source_record,
+            "confidence": confidence,
+            "decision": Decision.ACCEPTED if related else Decision.PENDING,
+        },
+    )
+    return True
+
+
 def missing_albums_with_notable_tracks(albums):
     """Return missing releases that contain at least one source-qualified notable track."""
     albums = list(albums)
@@ -394,28 +424,23 @@ def enrich_lastfm(artist):
         )
         kept += 1
     for item in client.similar_artists(artist.name):
-        name = item.get("name", "").strip()
-        if not name:
+        raw_name = item.get("name", "").strip()
+        if not raw_name:
             continue
         record = _record(
             Source.LASTFM,
             "related_artist",
-            f"{normalize_text(artist.name)}:{normalize_text(name)}",
+            f"{normalize_text(artist.name)}:{normalize_text(raw_name)}",
             item,
             item.get("url", ""),
         )
-        related = Artist.objects.filter(normalized_name=normalize_text(name)).first()
-        RelatedArtistEvidence.objects.update_or_create(
+        _store_related_artist_evidence(
             artist=artist,
-            related_artist_name=name,
             relationship_type=RelatedArtistEvidence.RelationshipType.SIMILAR,
             source=Source.LASTFM,
-            defaults={
-                "related_artist": related,
-                "source_record": record,
-                "confidence": Decimal(str(item.get("match") or 0.5)),
-                "decision": Decision.ACCEPTED if related else Decision.PENDING,
-            },
+            source_record=record,
+            raw_name=raw_name,
+            confidence=Decimal(str(item.get("match") or 0.5)),
         )
     return {"tracks": kept}
 
@@ -537,8 +562,8 @@ def enrich_musicbrainz(artist):
             )
     for relation in client.relationships(mbid):
         target = relation.get("artist") or {}
-        name = target.get("name", "").strip()
-        if not name:
+        raw_name = target.get("name", "").strip()
+        if not raw_name:
             continue
         relation_record = _record(
             Source.MUSICBRAINZ,
@@ -546,23 +571,18 @@ def enrich_musicbrainz(artist):
             f"{mbid}:{target.get('id')}:{relation.get('type-id')}",
             relation,
         )
-        related = Artist.objects.filter(normalized_name=normalize_text(name)).first()
         relation_type = (
             RelatedArtistEvidence.RelationshipType.MEMBER_OF
             if "member" in relation.get("type", "")
             else RelatedArtistEvidence.RelationshipType.COLLABORATOR
         )
-        RelatedArtistEvidence.objects.update_or_create(
+        _store_related_artist_evidence(
             artist=artist,
-            related_artist_name=name,
             relationship_type=relation_type,
             source=Source.MUSICBRAINZ,
-            defaults={
-                "related_artist": related,
-                "source_record": relation_record,
-                "confidence": Decimal("0.9"),
-                "decision": Decision.ACCEPTED if related else Decision.PENDING,
-            },
+            source_record=relation_record,
+            raw_name=raw_name,
+            confidence=Decimal("0.9"),
         )
     return {"albums": matched_albums, "singles": single_count}
 
@@ -931,23 +951,16 @@ def enrich_wikipedia(artist):
     infobox = _wikipedia_infobox(html)
     related_count = 0
     for key in ("associated acts", "spinoffs", "spin offs"):
-        for name in infobox.get(key, []):
-            if normalize_text(name) == artist.normalized_name:
-                continue
-            related = Artist.objects.filter(normalized_name=normalize_text(name)).first()
-            RelatedArtistEvidence.objects.update_or_create(
+        for raw_name in infobox.get(key, []):
+            if _store_related_artist_evidence(
                 artist=artist,
-                related_artist_name=name,
                 relationship_type=RelatedArtistEvidence.RelationshipType.COLLABORATOR,
                 source=Source.WIKIPEDIA,
-                defaults={
-                    "related_artist": related,
-                    "source_record": page_record,
-                    "confidence": Decimal("0.8"),
-                    "decision": Decision.ACCEPTED if related else Decision.PENDING,
-                },
-            )
-            related_count += 1
+                source_record=page_record,
+                raw_name=raw_name,
+                confidence=Decimal("0.8"),
+            ):
+                related_count += 1
     album_genres = 0
     for album in artist.albums.all():
         album_confidence, album_candidate = _best_album_candidate(
@@ -1393,6 +1406,77 @@ def refresh_album_genres(artist=None):
             )
 
 
+def _canonicalize_related_artist_evidence(local_artists):
+    """Collapse legacy featured-credit relationships onto their lead artists."""
+    groups = defaultdict(list)
+    delete_ids = set()
+    now = timezone.now()
+    evidence_items = list(RelatedArtistEvidence.objects.select_related("artist").order_by("pk"))
+    for evidence in evidence_items:
+        source_name = primary_artist_name(evidence.artist.name)
+        source_normalized = normalize_text(source_name)
+        source_artist = local_artists.get(source_normalized) or evidence.artist
+        related_name = primary_artist_name(evidence.related_artist_name)
+        related_normalized = normalize_text(related_name)
+        if not related_normalized or related_normalized == source_normalized:
+            delete_ids.add(evidence.pk)
+            continue
+        related_artist = local_artists.get(related_normalized)
+        display_name = related_artist.name if related_artist else related_name
+        groups[
+            (
+                source_artist.pk,
+                related_normalized,
+                evidence.relationship_type,
+                evidence.source,
+            )
+        ].append((evidence, source_artist, related_artist, display_name))
+
+    updates = []
+    decision_priority = {
+        Decision.REJECTED: 0,
+        Decision.PENDING: 1,
+        Decision.ACCEPTED: 2,
+    }
+    for group in groups.values():
+        keeper, source_artist, related_artist, display_name = min(
+            group,
+            key=lambda item: (
+                item[0].artist_id != item[1].pk,
+                item[0].related_artist_name != item[3],
+                item[0].pk,
+            ),
+        )
+        duplicates = [item[0] for item in group if item[0].pk != keeper.pk]
+        delete_ids.update(item.pk for item in duplicates)
+        keeper.artist = source_artist
+        keeper.related_artist = related_artist
+        keeper.related_artist_name = display_name
+        keeper.confidence = max(item[0].confidence for item in group)
+        keeper.decision = max(
+            (item[0].decision for item in group),
+            key=decision_priority.get,
+        )
+        keeper.updated_at = now
+        updates.append(keeper)
+
+    if delete_ids:
+        RelatedArtistEvidence.objects.filter(pk__in=delete_ids).delete()
+    if updates:
+        RelatedArtistEvidence.objects.bulk_update(
+            updates,
+            [
+                "artist",
+                "related_artist",
+                "related_artist_name",
+                "confidence",
+                "decision",
+                "updated_at",
+            ],
+            batch_size=250,
+        )
+
+
 @transaction.atomic
 def refresh_artist_recommendations():
     """Rank non-library artists by distinct local artists linking to them."""
@@ -1401,40 +1485,36 @@ def refresh_artist_recommendations():
         for artist in Artist.objects.all()
         if not has_feature_credit(artist.name)
     }
+    _canonicalize_related_artist_evidence(local_artists)
     buckets = {}
-    reconciled = []
     evidence_items = RelatedArtistEvidence.objects.exclude(
         decision=Decision.REJECTED
     ).select_related("artist")
     for evidence in evidence_items:
-        if has_feature_credit(evidence.related_artist_name):
-            continue
-        normalized = normalize_text(evidence.related_artist_name)
-        if not normalized or normalized == evidence.artist.normalized_name:
+        related_name = primary_artist_name(evidence.related_artist_name)
+        normalized = normalize_text(related_name)
+        source_name = primary_artist_name(evidence.artist.name)
+        source_normalized = normalize_text(source_name)
+        if not normalized or normalized == source_normalized:
             continue
         local_match = local_artists.get(normalized)
         if local_match:
-            if evidence.related_artist_id != local_match.pk:
-                evidence.related_artist = local_match
-                reconciled.append(evidence)
             continue
         bucket = buckets.setdefault(
             normalized,
             {
-                "name": evidence.related_artist_name,
+                "name": related_name,
                 "artists": {},
                 "sources": set(),
                 "types": set(),
                 "evidence_count": 0,
             },
         )
-        bucket["artists"][evidence.artist.normalized_name] = evidence.artist.name
+        local_source = local_artists.get(source_normalized)
+        bucket["artists"][source_normalized] = local_source.name if local_source else source_name
         bucket["sources"].add(evidence.source)
         bucket["types"].add(evidence.relationship_type)
         bucket["evidence_count"] += 1
-
-    if reconciled:
-        RelatedArtistEvidence.objects.bulk_update(reconciled, ["related_artist"])
 
     ranked = sorted(
         buckets.items(),

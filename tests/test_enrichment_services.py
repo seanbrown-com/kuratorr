@@ -1100,7 +1100,7 @@ def test_recommendations_rank_absent_artists_by_distinct_library_links(artist):
 
 
 @pytest.mark.django_db
-def test_recommendations_exclude_featured_artist_credits(artist):
+def test_recommendations_canonicalize_featured_related_artist_credits(artist):
     RelatedArtistEvidence.objects.create(
         artist=artist,
         related_artist_name="Failure feat. Hayley Williams & Chino Moreno",
@@ -1118,8 +1118,78 @@ def test_recommendations_exclude_featured_artist_credits(artist):
         decision=Decision.PENDING,
     )
 
-    assert refresh_artist_recommendations()["recommendations"] == 1
-    assert list(ArtistRecommendation.objects.values_list("name", flat=True)) == ["Hum"]
+    assert refresh_artist_recommendations()["recommendations"] == 2
+    assert list(ArtistRecommendation.objects.values_list("name", flat=True)) == [
+        "Failure",
+        "Hum",
+    ]
+    relationship = RelatedArtistEvidence.objects.get(
+        related_artist_name="Failure",
+        source=Source.WIKIPEDIA,
+    )
+    assert relationship.artist == artist
+
+
+@pytest.mark.django_db
+def test_recommendation_links_collapse_featured_source_credits():
+    big_boi = Artist.objects.create(name="Big Boi", normalized_name="big boi")
+    featured_credits = [
+        Artist.objects.create(
+            name="Big Boi feat. B.o.B & Joi",
+            normalized_name="big boi feat b o b joi",
+        ),
+        Artist.objects.create(
+            name="Big Boi feat. Sleepy Brown",
+            normalized_name="big boi feat sleepy brown",
+        ),
+    ]
+    for source_artist in [big_boi, *featured_credits]:
+        RelatedArtistEvidence.objects.create(
+            artist=source_artist,
+            related_artist_name="Lupe Fiasco",
+            relationship_type=RelatedArtistEvidence.RelationshipType.SIMILAR,
+            source=Source.LASTFM,
+            confidence=Decimal("0.8"),
+            decision=Decision.PENDING,
+        )
+
+    assert refresh_artist_recommendations() == {
+        "recommendations": 1,
+        "top_artist": "Lupe Fiasco",
+    }
+    recommendation = ArtistRecommendation.objects.get()
+    assert recommendation.linked_artist_count == 1
+    assert recommendation.evidence_count == 1
+    assert recommendation.linked_artists == ["Big Boi"]
+    relationship = RelatedArtistEvidence.objects.get()
+    assert relationship.artist == big_boi
+    assert relationship.related_artist_name == "Lupe Fiasco"
+
+
+@pytest.mark.django_db
+def test_lastfm_related_artist_feature_credit_is_stored_as_lead_artist(artist, monkeypatch):
+    from enrichment.services import enrich_lastfm
+
+    class FakeLastFm:
+        def artist_top_tracks(self, name, limit):
+            return []
+
+        def similar_artists(self, name, limit=30):
+            return [
+                {
+                    "name": "Lupe Fiasco feat. Jill Scott",
+                    "match": "0.91",
+                    "url": "https://last.fm/music/Lupe+Fiasco",
+                }
+            ]
+
+    monkeypatch.setattr("enrichment.services.LastFmClient", FakeLastFm)
+
+    enrich_lastfm(artist)
+
+    relationship = RelatedArtistEvidence.objects.get()
+    assert relationship.related_artist_name == "Lupe Fiasco"
+    assert relationship.artist == artist
 
 
 @pytest.mark.django_db
