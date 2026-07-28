@@ -5,9 +5,11 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
+from django_celery_results.models import TaskResult
 
 from dashboard.forms import InitialSetupForm, ServiceSettingsForm
 from enrichment.job_control import cancel_job, reconcile_stale_jobs, replace_active_job
@@ -66,13 +68,11 @@ def dashboard(request):
     return render(request, "dashboard/index.html", context)
 
 
-@login_required
-def job_history(request):
-    reconcile_stale_jobs()
+def _filtered_jobs(params):
     jobs = JobRun.objects.all()
-    selected_status = request.GET.get("status", "")
-    selected_type = request.GET.get("type", "")
-    selected_requested = request.GET.get("requested", "")
+    selected_status = params.get("status", "")
+    selected_type = params.get("type", "")
+    selected_requested = params.get("requested", "")
     if selected_status in JobRun.Status.values:
         jobs = jobs.filter(status=selected_status)
     else:
@@ -85,6 +85,58 @@ def job_history(request):
         jobs = jobs.filter(requested_manually=False)
     else:
         selected_requested = ""
+    return jobs, selected_status, selected_type, selected_requested
+
+
+def _clearable_job_ids(params):
+    """Find filtered terminal jobs without crossing an active job hierarchy."""
+    jobs, selected_status, selected_type, selected_requested = _filtered_jobs(params)
+    terminal_statuses = [
+        JobRun.Status.SUCCEEDED,
+        JobRun.Status.FAILED,
+        JobRun.Status.CANCELLED,
+    ]
+    candidate_ids = set(jobs.filter(status__in=terminal_statuses).values_list("pk", flat=True))
+
+    # Completed children are still needed while an active parent aggregates its
+    # progress. Protect every descendant of an active job from history cleanup.
+    frontier = set(
+        JobRun.objects.filter(status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING]).values_list(
+            "pk", flat=True
+        )
+    )
+    while frontier:
+        descendants = set(
+            JobRun.objects.filter(parent_id__in=frontier).values_list("pk", flat=True)
+        )
+        new_descendants = descendants & candidate_ids
+        candidate_ids.difference_update(new_descendants)
+        frontier = descendants
+
+    # Deleting a parent cascades to its children. If any child falls outside the
+    # filtered cleanup set, retain the parent so no unselected history disappears.
+    while candidate_ids:
+        parents_with_retained_children = set(
+            JobRun.objects.filter(parent_id__in=candidate_ids)
+            .exclude(pk__in=candidate_ids)
+            .values_list("parent_id", flat=True)
+        )
+        if not parents_with_retained_children:
+            break
+        candidate_ids.difference_update(parents_with_retained_children)
+
+    return (
+        candidate_ids,
+        selected_status,
+        selected_type,
+        selected_requested,
+    )
+
+
+@login_required
+def job_history(request):
+    reconcile_stale_jobs()
+    jobs, selected_status, selected_type, selected_requested = _filtered_jobs(request.GET)
     job_types = JobRun.objects.order_by("job_type").values_list("job_type", flat=True).distinct()
     page = Paginator(jobs, 100).get_page(request.GET.get("page"))
     return render(
@@ -94,6 +146,38 @@ def job_history(request):
             "page": page,
             "statuses": JobRun.Status.choices,
             "job_types": job_types,
+            "selected_status": selected_status,
+            "selected_type": selected_type,
+            "selected_requested": selected_requested,
+        },
+    )
+
+
+@login_required
+def clear_job_history(request):
+    params = request.POST if request.method == "POST" else request.GET
+    clearable_ids, selected_status, selected_type, selected_requested = _clearable_job_ids(params)
+    if request.method == "POST" and request.POST.get("confirm") == "yes":
+        with transaction.atomic():
+            clearable_ids, _, _, _ = _clearable_job_ids(request.POST)
+            task_ids = list(
+                JobRun.objects.filter(pk__in=clearable_ids)
+                .exclude(celery_task_id="")
+                .values_list("celery_task_id", flat=True)
+            )
+            _, deleted_by_model = JobRun.objects.filter(pk__in=clearable_ids).delete()
+            if task_ids:
+                TaskResult.objects.filter(task_id__in=task_ids).delete()
+        deleted_jobs = deleted_by_model.get("enrichment.JobRun", 0)
+        messages.success(request, f"Removed {deleted_jobs} past job(s) from history.")
+        return redirect("job-history")
+    if request.method == "POST":
+        messages.error(request, "Confirm that you want to permanently clear this job history.")
+    return render(
+        request,
+        "dashboard/job_history_confirm_clear.html",
+        {
+            "clearable_count": len(clearable_ids),
             "selected_status": selected_status,
             "selected_type": selected_type,
             "selected_requested": selected_requested,

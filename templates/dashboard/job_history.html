@@ -29,7 +29,8 @@
     </select>
   </label>
   <button>Filter</button>
-  {% if selected_status or selected_type or selected_requested %}<a class="button secondary" href="{% url 'job-history' %}">Clear</a>{% endif %}
+  <a class="button danger" href="{% url 'clear-job-history' %}?status={{ selected_status|urlencode }}&type={{ selected_type|urlencode }}&requested={{ selected_requested|urlencode }}">Clear history</a>
+  {% if selected_status or selected_type or selected_requested %}<a class="button secondary" href="{% url 'job-history' %}">Reset filters</a>{% endif %}
 </form>
 <section class="card">
   <table>

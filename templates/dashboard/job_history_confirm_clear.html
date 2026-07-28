@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Clear job history · Kuratorr{% endblock %}
+{% block content %}
+<div class="heading">
+  <div>
+    <h1>Clear job history</h1>
+    <p>Permanently remove completed job records matching the selected history filters.</p>
+  </div>
+</div>
+<section class="card danger-zone">
+  <h2>{{ clearable_count }} past job{{ clearable_count|pluralize }} selected</h2>
+  <p>Only succeeded, failed, and cancelled jobs will be removed. Queued and running jobs—and completed child jobs still needed by active parent jobs—are protected.</p>
+  <p>This removes the matching Kuratorr job records and their stored Celery results. It does not remove tracks, enrichment evidence, recommendations, playlists, or music files.</p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="status" value="{{ selected_status }}">
+    <input type="hidden" name="type" value="{{ selected_type }}">
+    <input type="hidden" name="requested" value="{{ selected_requested }}">
+    <label><input type="checkbox" name="confirm" value="yes" required> I understand this job history will be permanently deleted.</label>
+    <div class="actions">
+      <button class="danger"{% if not clearable_count %} disabled{% endif %}>Clear selected history</button>
+      <a class="button secondary" href="{% url 'job-history' %}?status={{ selected_status|urlencode }}&type={{ selected_type|urlencode }}&requested={{ selected_requested|urlencode }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

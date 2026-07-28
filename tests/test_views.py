@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django_celery_results.models import TaskResult
 
 from enrichment.models import (
     ArtistRecommendation,
@@ -385,6 +386,117 @@ def test_job_history_can_cancel_running_job(client, django_user_model, monkeypat
     job.refresh_from_db()
     assert job.status == JobRun.Status.CANCELLED
     assert revoked == [("task-123", False)]
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_job_history_clear_removes_only_filtered_terminal_jobs_and_results(
+    client, django_user_model
+):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    failed = JobRun.objects.create(
+        job_type="enrich_artist",
+        status=JobRun.Status.FAILED,
+        requested_manually=True,
+        celery_task_id="failed-task",
+    )
+    succeeded = JobRun.objects.create(
+        job_type="generate_playlists",
+        status=JobRun.Status.SUCCEEDED,
+        requested_manually=True,
+        celery_task_id="successful-task",
+    )
+    running = JobRun.objects.create(
+        job_type="enrich_artist",
+        status=JobRun.Status.RUNNING,
+        requested_manually=True,
+        celery_task_id="running-task",
+        started_at=timezone.now(),
+        heartbeat_at=timezone.now(),
+    )
+    TaskResult.objects.create(task_id="failed-task", status="FAILURE")
+    TaskResult.objects.create(task_id="successful-task", status="SUCCESS")
+    TaskResult.objects.create(task_id="running-task", status="STARTED")
+    client.force_login(user)
+
+    confirmation = client.get(
+        reverse("clear-job-history"),
+        {"status": "failed", "type": "enrich_artist", "requested": "manual"},
+    )
+    response = client.post(
+        reverse("clear-job-history"),
+        {
+            "status": "failed",
+            "type": "enrich_artist",
+            "requested": "manual",
+            "confirm": "yes",
+        },
+    )
+
+    assert confirmation.status_code == 200
+    assert "1 past job selected" in confirmation.content.decode()
+    assert response.status_code == 302
+    assert not JobRun.objects.filter(pk=failed.pk).exists()
+    assert JobRun.objects.filter(pk=succeeded.pk).exists()
+    assert JobRun.objects.filter(pk=running.pk).exists()
+    assert not TaskResult.objects.filter(task_id="failed-task").exists()
+    assert TaskResult.objects.filter(task_id="successful-task").exists()
+    assert TaskResult.objects.filter(task_id="running-task").exists()
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_job_history_clear_protects_active_job_family(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    parent = JobRun.objects.create(
+        job_type="enrich_library",
+        status=JobRun.Status.RUNNING,
+        started_at=timezone.now(),
+        heartbeat_at=timezone.now(),
+    )
+    completed_child = JobRun.objects.create(
+        job_type="enrich_artist",
+        status=JobRun.Status.SUCCEEDED,
+        parent=parent,
+    )
+    unrelated = JobRun.objects.create(
+        job_type="enrich_artist",
+        status=JobRun.Status.SUCCEEDED,
+    )
+    client.force_login(user)
+
+    response = client.post(
+        reverse("clear-job-history"),
+        {"confirm": "yes"},
+    )
+
+    assert response.status_code == 302
+    assert JobRun.objects.filter(pk=parent.pk).exists()
+    assert JobRun.objects.filter(pk=completed_child.pk).exists()
+    assert not JobRun.objects.filter(pk=unrelated.pk).exists()
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_job_history_clear_requires_confirmation(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    job = JobRun.objects.create(
+        job_type="scan_library",
+        status=JobRun.Status.SUCCEEDED,
+    )
+    client.force_login(user)
+
+    response = client.post(reverse("clear-job-history"))
+
+    assert response.status_code == 200
+    assert JobRun.objects.filter(pk=job.pk).exists()
+    assert "Confirm that you want" in list(response.context["messages"])[0].message
 
 
 @pytest.mark.django_db
