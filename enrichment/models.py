@@ -175,6 +175,37 @@ class NoteworthyEvidence(TimestampedModel):
         ]
 
 
+class NoteworthyDecisionStage(TimestampedModel):
+    """Bounded, disposable staging rows for an all-or-nothing reconciliation."""
+
+    run_id = models.UUIDField(db_index=True)
+    evidence = models.ForeignKey(NoteworthyEvidence, on_delete=models.CASCADE)
+    external_track = models.ForeignKey(
+        ExternalTrack,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+    )
+    matched_track = models.ForeignKey(
+        Track,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
+    external_title = models.CharField(max_length=1000, blank=True)
+    confidence = models.DecimalField(max_digits=4, decimal_places=3, default=0)
+    decision = models.CharField(max_length=20, choices=Decision.choices)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run_id", "evidence"],
+                name="unique_noteworthy_stage_evidence",
+            )
+        ]
+
+
 class AlbumGenreEvidence(TimestampedModel):
     album = models.ForeignKey(Album, on_delete=models.CASCADE, related_name="genre_evidence")
     genre = models.ForeignKey(Genre, on_delete=models.PROTECT, related_name="album_evidence")

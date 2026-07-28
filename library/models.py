@@ -39,6 +39,7 @@ class ServiceSettings(TimestampedModel):
         default=0.900,
         help_text="Minimum whole-title similarity accepted automatically.",
     )
+    noteworthy_decision_revision = models.PositiveBigIntegerField(default=0, editable=False)
     spotify_client_id_encrypted = models.TextField(blank=True)
     spotify_client_secret_encrypted = models.TextField(blank=True)
     lastfm_api_key_encrypted = models.TextField(blank=True)

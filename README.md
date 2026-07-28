@@ -57,7 +57,7 @@ make directory browsing stall.
 Useful commands:
 
 ```bash
-docker compose logs -f web worker worker-enrichment worker-recommendations worker-playlists beat
+docker compose logs -f web worker worker-enrichment worker-maintenance worker-recommendations worker-playlists beat
 docker compose exec web python manage.py check
 docker compose exec web pytest -q
 docker compose down
@@ -122,6 +122,7 @@ In separate terminals:
 ```bash
 .venv/bin/celery -A config worker --loglevel=INFO --queues=control,celery --hostname=control@%h
 .venv/bin/celery -A config worker --loglevel=INFO --queues=enrichment --concurrency=2 --hostname=enrichment@%h
+.venv/bin/celery -A config worker --loglevel=INFO --queues=maintenance --concurrency=1 --hostname=maintenance@%h
 .venv/bin/celery -A config worker --loglevel=INFO --queues=recommendations --concurrency=1 --hostname=recommendations@%h
 .venv/bin/celery -A config worker --loglevel=INFO --queues=playlists --concurrency=1 --hostname=playlists@%h
 .venv/bin/celery -A config beat --loglevel=INFO
@@ -145,7 +146,7 @@ The installer expects a fresh Debian 13 container with working DNS, a domain poi
 ./scripts/install-lxc.sh music.example.com admin@example.com
 ```
 
-The script clones `https://github.com/seanbrown-com/kuratorr.git` automatically. It installs PostgreSQL, Redis, Nginx, Python, Gunicorn, Celery, and systemd services; generates database, Django, and one-time setup secrets; runs migrations/static collection; and prints the setup token. Supplying an email enables automatic Let's Encrypt HTTPS; omitting it creates an HTTP installation suitable for a trusted LAN. Add API credentials on the Settings page (or use environment fallbacks), make mounted paths readable by `kuratorr`, make output paths writable, and restart the three application services after environment changes.
+The script clones `https://github.com/seanbrown-com/kuratorr.git` automatically. It installs PostgreSQL, Redis, Nginx, Python, Gunicorn, Celery, and systemd services; generates database, Django, and one-time setup secrets; runs migrations/static collection; and prints the setup token. Supplying an email enables automatic Let's Encrypt HTTPS; omitting it creates an HTTP installation suitable for a trusted LAN. Add API credentials on the Settings page (or use environment fallbacks), make mounted paths readable by `kuratorr`, make output paths writable, and restart the Kuratorr application services after environment changes.
 
 Update an installed service as root:
 
@@ -153,7 +154,7 @@ Update an installed service as root:
 /opt/kuratorr/scripts/update-from-git.sh
 ```
 
-The updater logs and times each stage, creates a verbose timestamped PostgreSQL backup, requires a non-interactive fast-forward Git pull, installs dependency changes, migrates, collects static files, restarts services, and displays their status.
+The updater logs and times each stage, creates a verbose timestamped PostgreSQL backup, requires a non-interactive fast-forward Git pull, installs dependency changes, stops application services before migrating, collects static files, restarts services even after an interrupted migration, and displays their status.
 
 See [architecture](docs/architecture.md), [data-source behavior](docs/data-sources.md), and the [deployment runbook](docs/deployment.md).
 

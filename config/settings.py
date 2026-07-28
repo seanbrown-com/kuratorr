@@ -112,7 +112,7 @@ CELERY_TASK_ROUTES = {
     "enrichment.tasks.enrich_library_task": {"queue": "control"},
     "enrichment.tasks.run_pending_enrichments": {"queue": "control"},
     "enrichment.tasks.enrich_artist_task": {"queue": "enrichment"},
-    "enrichment.tasks.refresh_noteworthy_decisions_task": {"queue": "enrichment"},
+    "enrichment.tasks.refresh_noteworthy_decisions_task": {"queue": "maintenance"},
     "enrichment.tasks.refresh_artist_recommendations_task": {"queue": "recommendations"},
     "playlists.tasks.*": {"queue": "playlists"},
 }

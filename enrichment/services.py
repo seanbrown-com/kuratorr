@@ -1,12 +1,15 @@
 import re
+import uuid
 from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from enrichment.clients import (
     LastFmClient,
@@ -23,6 +26,7 @@ from enrichment.models import (
     ExternalIdentifier,
     ExternalTrack,
     MissingAlbum,
+    NoteworthyDecisionStage,
     NoteworthyEvidence,
     RelatedArtistEvidence,
     Source,
@@ -141,29 +145,37 @@ def _match_local_track(
     album_title="",
     settings=None,
     tracks=None,
+    track_index=None,
 ):
     settings = settings or ServiceSettings.load()
     tracks = tracks if tracks is not None else artist.tracks.filter(is_available=True)
     if hasattr(tracks, "select_related"):
-        tracks = tracks.select_related("album")
-    scored = sorted(
-        (
-            (
-                _title_score(title, track.title),
-                _title_score(album_title, track.album.title) if album_title else Decimal("0"),
-                -abs((track.year or track.album.year) - year)
-                if year and (track.year or track.album.year)
-                else -9999,
-                track,
-            )
-            for track in tracks
-        ),
-        key=lambda x: (x[0], x[1], x[2]),
-        reverse=True,
-    )
-    if not scored:
+        tracks = list(tracks.select_related("album"))
+    else:
+        tracks = list(tracks)
+    if track_index is None:
+        track_index = defaultdict(list)
+        for track in tracks:
+            key = _title_key(track.title)
+            if key:
+                track_index[key].append(track)
+    query_key = _title_key(title)
+    if not query_key or not track_index:
         return None, Decimal("0"), Decision.REJECTED
-    confidence, _, _, track = scored[0]
+    match = process.extractOne(query_key, track_index.keys(), scorer=fuzz.ratio)
+    if not match:
+        return None, Decimal("0"), Decision.REJECTED
+    matched_key, score, _ = match
+    confidence = Decimal(str(round(score / 100, 3)))
+    track = max(
+        track_index[matched_key],
+        key=lambda candidate: (
+            _title_score(album_title, candidate.album.title) if album_title else Decimal("0"),
+            -abs((candidate.year or candidate.album.year) - year)
+            if year and (candidate.year or candidate.album.year)
+            else -9999,
+        ),
+    )
     if confidence >= settings.track_match_auto_accept_threshold:
         return track, confidence, Decision.ACCEPTED
     if confidence >= settings.track_match_review_threshold:
@@ -1097,162 +1109,266 @@ def enrich_youtube(artist):
     return {"videos": kept}
 
 
-def refresh_noteworthy_decisions(artist=None, cancellation_check=None):
-    """Reapply automatic source rules to both new and previously stored evidence."""
+def refresh_noteworthy_decisions(
+    artist=None,
+    cancellation_check=None,
+    expected_settings_revision=None,
+):
+    """Reapply automatic rules without retaining the full evidence graph in memory."""
     settings = ServiceSettings.load()
-    evidence_items = (
-        NoteworthyEvidence.objects.filter(decision_is_manual=False)
-        .exclude(evidence_type=NoteworthyEvidence.EvidenceType.MANUAL)
-        .select_related("artist", "external_track__source_record", "track")
+    if expected_settings_revision is None:
+        expected_settings_revision = settings.noteworthy_decision_revision
+    evidence_query = NoteworthyEvidence.objects.filter(decision_is_manual=False).exclude(
+        evidence_type=NoteworthyEvidence.EvidenceType.MANUAL
     )
     if artist:
-        evidence_items = evidence_items.filter(artist=artist)
+        evidence_query = evidence_query.filter(artist=artist)
+    total = evidence_query.count()
+    processed = 0
     accepted = 0
     rejected = 0
     pending = 0
-    changed = []
-    changed_external = {}
-    tracks_by_artist = {}
-    source_confidence_cache = {}
+    run_id = uuid.uuid4()
+    stage_buffer = []
     now = timezone.now()
-    evidence_items = list(evidence_items)
-    total = len(evidence_items)
-    if cancellation_check:
-        cancellation_check(current=0, total=total)
-    track_context = {}
+    NoteworthyDecisionStage.objects.filter(created_at__lt=now - timedelta(hours=24)).delete()
+
+    def check_cancellation(**progress):
+        if not cancellation_check:
+            return
+        try:
+            cancellation_check(**progress)
+        except Exception:
+            NoteworthyDecisionStage.objects.filter(run_id=run_id).delete()
+            raise
+
+    check_cancellation(current=0, total=total)
+
     context_priority = {
         NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE: 3,
         NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE: 3,
         NoteworthyEvidence.EvidenceType.SPOTIFY_TOP: 2,
     }
-    for item in evidence_items:
-        external = item.external_track
-        if not external or not external.album_title:
-            continue
-        key = (item.artist_id, _title_key(external.title))
-        priority = context_priority.get(item.evidence_type, 1)
-        if key not in track_context or priority > track_context[key][0]:
-            track_context[key] = (
-                priority,
-                external.album_title,
-                external.year,
-            )
-    for index, evidence in enumerate(evidence_items, 1):
-        if cancellation_check and (index == 1 or index % 50 == 0):
-            cancellation_check(current=index - 1, total=total)
-        external = evidence.external_track
-        match_decision = Decision.REJECTED
-        if external:
-            if external.source_record.source == Source.WIKIPEDIA:
-                cleaned_title = _clean_wikipedia_title(external.title)
-                if cleaned_title:
-                    external.title = cleaned_title
-            local_tracks = tracks_by_artist.get(evidence.artist_id)
-            if local_tracks is None:
-                local_tracks = list(
-                    evidence.artist.tracks.filter(is_available=True).select_related("album")
-                )
-                tracks_by_artist[evidence.artist_id] = local_tracks
-            context = track_context.get(
-                (evidence.artist_id, _title_key(external.title)),
-                (0, "", None),
-            )
-            matched, match_confidence, match_decision = _match_local_track(
-                evidence.artist,
-                external.title,
-                year=external.year or context[2],
-                album_title=external.album_title or context[1],
-                settings=settings,
-                tracks=local_tracks,
-            )
-            external.matched_track = matched
-            external.match_confidence = match_confidence
-            evidence.track = matched
-            evidence.confidence = match_confidence
-            source_key = (evidence.artist_id, external.source_record.source)
-            if source_key not in source_confidence_cache:
-                source_confidence_cache[source_key] = (
-                    ExternalIdentifier.objects.filter(
-                        artist_id=evidence.artist_id,
-                        entity_kind="artist",
-                        source=external.source_record.source,
-                    )
-                    .order_by("-confidence")
-                    .values_list("confidence", flat=True)
-                    .first()
-                )
-            source_confidence = source_confidence_cache[source_key]
-            if (
-                match_decision == Decision.ACCEPTED
-                and source_confidence is not None
-                and source_confidence < Decimal("0.85")
-            ):
-                match_decision = Decision.PENDING
-        qualifies = False
-        reason = "Source item did not match a local track confidently."
-        if evidence.evidence_type == NoteworthyEvidence.EvidenceType.SPOTIFY_TOP:
-            rank = external.rank if external else None
-            qualifies = bool(rank and rank <= settings.spotify_noteworthy_max_rank)
-            reason = f"Spotify artist top-track rank {rank}; automatic cutoff is {settings.spotify_noteworthy_max_rank}."
-        elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.LASTFM_TOP:
-            rank = external.rank if external else None
-            playcount = external.playcount if external else None
-            qualifies = bool(
-                rank
-                and rank <= settings.lastfm_noteworthy_max_rank
-                and playcount is not None
-                and playcount >= settings.lastfm_min_playcount
-            )
-            reason = f"Last.fm artist top-track rank {rank}; automatic cutoff is {settings.lastfm_noteworthy_max_rank}."
-        elif evidence.evidence_type in {
-            NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE,
-            NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
-            NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
-        }:
-            qualifies = True
-            reason = evidence.notes or "Explicitly classified as a single by a source."
-        elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL:
-            payload = external.source_record.payload if external else {}
-            confidence = _youtube_confidence(payload, evidence.artist)
-            qualifies = confidence >= settings.track_match_auto_accept_threshold
-            reason = "Requires an explicit official music video on the artist or VEVO channel."
+    artist_ids = evidence_query.order_by().values_list("artist_id", flat=True).distinct()
+    for artist_id in artist_ids.iterator(chunk_size=100):
+        current_artist = (
+            artist if artist and artist.pk == artist_id else Artist.objects.get(pk=artist_id)
+        )
+        check_cancellation(current=processed, total=total)
+        evidence_items = list(
+            evidence_query.filter(artist_id=artist_id)
+            .select_related("external_track__source_record")
+            .defer("external_track__source_record__payload")
+            .order_by("pk")
+        )
+        local_tracks = list(
+            current_artist.tracks.filter(is_available=True).select_related("album").order_by("pk")
+        )
+        track_index = defaultdict(list)
+        for local_track in local_tracks:
+            key = _title_key(local_track.title)
+            if key:
+                track_index[key].append(local_track)
 
-        if match_decision == Decision.REJECTED:
-            evidence.decision = Decision.REJECTED
-            rejected += 1
-        elif match_decision == Decision.PENDING:
-            evidence.decision = Decision.PENDING
-            pending += 1
-        elif qualifies:
-            evidence.decision = Decision.ACCEPTED
-            accepted += 1
-        else:
-            evidence.decision = Decision.REJECTED
-            rejected += 1
-        if external:
-            external.match_decision = evidence.decision
-            changed_external[external.pk] = external
-        evidence.notes = reason
-        evidence.updated_at = now
-        changed.append(evidence)
-    with transaction.atomic():
-        if cancellation_check:
-            cancellation_check(current=total, total=total)
-        ExternalTrack.objects.bulk_update(
-            list(changed_external.values()),
-            [
-                "matched_track",
-                "title",
-                "match_confidence",
-                "match_decision",
-                "updated_at",
-            ],
-            batch_size=250,
+        track_context = {}
+        source_names = set()
+        youtube_record_ids = set()
+        for item in evidence_items:
+            external = item.external_track
+            if not external:
+                continue
+            source_names.add(external.source_record.source)
+            if external.source_record.source == Source.YOUTUBE:
+                youtube_record_ids.add(external.source_record_id)
+            if not external.album_title:
+                continue
+            key = _title_key(external.title)
+            priority = context_priority.get(item.evidence_type, 1)
+            if key not in track_context or priority > track_context[key][0]:
+                track_context[key] = (
+                    priority,
+                    external.album_title,
+                    external.year,
+                )
+
+        source_confidence = {
+            row["source"]: row["best_confidence"]
+            for row in ExternalIdentifier.objects.filter(
+                artist_id=artist_id,
+                entity_kind="artist",
+                source__in=source_names,
+            )
+            .values("source")
+            .annotate(best_confidence=Max("confidence"))
+        }
+        youtube_payloads = dict(
+            SourceRecord.objects.filter(pk__in=youtube_record_ids).values_list("pk", "payload")
         )
-        NoteworthyEvidence.objects.bulk_update(
-            changed, ["track", "confidence", "decision", "notes", "updated_at"], batch_size=250
-        )
-    return {"accepted": accepted, "rejected": rejected, "pending": pending}
+
+        for evidence in evidence_items:
+            external = evidence.external_track
+            match_decision = Decision.REJECTED
+            matched = None
+            match_confidence = Decimal("0")
+            if external:
+                title = external.title
+                if external.source_record.source == Source.WIKIPEDIA:
+                    title = _clean_wikipedia_title(title) or title
+                context = track_context.get(_title_key(title), (0, "", None))
+                matched, match_confidence, match_decision = _match_local_track(
+                    current_artist,
+                    title,
+                    year=external.year or context[2],
+                    album_title=external.album_title or context[1],
+                    settings=settings,
+                    tracks=local_tracks,
+                    track_index=track_index,
+                )
+                confidence = source_confidence.get(external.source_record.source)
+                if (
+                    match_decision == Decision.ACCEPTED
+                    and confidence is not None
+                    and confidence < Decimal("0.85")
+                ):
+                    match_decision = Decision.PENDING
+
+            qualifies = False
+            reason = "Source item did not match a local track confidently."
+            if evidence.evidence_type == NoteworthyEvidence.EvidenceType.SPOTIFY_TOP:
+                rank = external.rank if external else None
+                qualifies = bool(rank and rank <= settings.spotify_noteworthy_max_rank)
+                reason = (
+                    f"Spotify artist top-track rank {rank}; automatic cutoff is "
+                    f"{settings.spotify_noteworthy_max_rank}."
+                )
+            elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.LASTFM_TOP:
+                rank = external.rank if external else None
+                playcount = external.playcount if external else None
+                qualifies = bool(
+                    rank
+                    and rank <= settings.lastfm_noteworthy_max_rank
+                    and playcount is not None
+                    and playcount >= settings.lastfm_min_playcount
+                )
+                reason = (
+                    f"Last.fm artist top-track rank {rank}; automatic cutoff is "
+                    f"{settings.lastfm_noteworthy_max_rank}."
+                )
+            elif evidence.evidence_type in {
+                NoteworthyEvidence.EvidenceType.MUSICBRAINZ_SINGLE,
+                NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+                NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
+            }:
+                qualifies = True
+                reason = evidence.notes or "Explicitly classified as a single by a source."
+            elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL:
+                payload = youtube_payloads.get(external.source_record_id, {}) if external else {}
+                confidence = _youtube_confidence(payload, current_artist)
+                qualifies = confidence >= settings.track_match_auto_accept_threshold
+                reason = "Requires an explicit official music video on the artist or VEVO channel."
+
+            if match_decision == Decision.REJECTED:
+                decision = Decision.REJECTED
+                rejected += 1
+            elif match_decision == Decision.PENDING:
+                decision = Decision.PENDING
+                pending += 1
+            elif qualifies:
+                decision = Decision.ACCEPTED
+                accepted += 1
+            else:
+                decision = Decision.REJECTED
+                rejected += 1
+            stage_buffer.append(
+                NoteworthyDecisionStage(
+                    run_id=run_id,
+                    evidence_id=evidence.pk,
+                    external_track_id=external.pk if external else None,
+                    matched_track_id=matched.pk if matched else None,
+                    external_title=title if external else "",
+                    confidence=match_confidence,
+                    decision=decision,
+                    notes=reason,
+                )
+            )
+            if len(stage_buffer) >= 250:
+                NoteworthyDecisionStage.objects.bulk_create(stage_buffer, batch_size=250)
+                stage_buffer.clear()
+            processed += 1
+            if processed % 50 == 0:
+                check_cancellation(current=processed, total=total)
+
+        # Explicitly release the artist's evidence graph and track list before
+        # loading the next artist. Only a bounded staging buffer survives.
+        del evidence_items, local_tracks, track_index, youtube_payloads
+
+    if stage_buffer:
+        NoteworthyDecisionStage.objects.bulk_create(stage_buffer, batch_size=250)
+        stage_buffer.clear()
+
+    try:
+        with transaction.atomic():
+            locked_settings = ServiceSettings.objects.select_for_update().get(pk=settings.pk)
+            if locked_settings.noteworthy_decision_revision != expected_settings_revision:
+                from enrichment.job_control import JobCancelled
+
+                raise JobCancelled("Decision settings changed while reconciliation was running.")
+            check_cancellation(current=total, total=total)
+            last_stage_pk = 0
+            while True:
+                staged = list(
+                    NoteworthyDecisionStage.objects.filter(
+                        run_id=run_id,
+                        pk__gt=last_stage_pk,
+                    ).order_by("pk")[:250]
+                )
+                if not staged:
+                    break
+                last_stage_pk = staged[-1].pk
+                external_objects = [
+                    ExternalTrack(
+                        pk=item.external_track_id,
+                        matched_track_id=item.matched_track_id,
+                        title=item.external_title,
+                        match_confidence=item.confidence,
+                        match_decision=item.decision,
+                        updated_at=now,
+                    )
+                    for item in staged
+                    if item.external_track_id
+                ]
+                if external_objects:
+                    ExternalTrack.objects.bulk_update(
+                        external_objects,
+                        [
+                            "matched_track",
+                            "title",
+                            "match_confidence",
+                            "match_decision",
+                            "updated_at",
+                        ],
+                        batch_size=250,
+                    )
+                evidence_objects = [
+                    NoteworthyEvidence(
+                        pk=item.evidence_id,
+                        track_id=item.matched_track_id,
+                        confidence=item.confidence,
+                        decision=item.decision,
+                        notes=item.notes,
+                        updated_at=now,
+                    )
+                    for item in staged
+                ]
+                NoteworthyEvidence.objects.bulk_update(
+                    evidence_objects,
+                    ["track", "confidence", "decision", "notes", "updated_at"],
+                    batch_size=250,
+                )
+            NoteworthyDecisionStage.objects.filter(run_id=run_id).delete()
+        return {"accepted": accepted, "rejected": rejected, "pending": pending}
+    finally:
+        NoteworthyDecisionStage.objects.filter(run_id=run_id).delete()
 
 
 def refresh_album_genres(artist=None):

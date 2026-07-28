@@ -76,6 +76,27 @@ services:
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
+  worker-maintenance:
+    build: .
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    environment: {SKIP_MIGRATIONS: "true"}
+    command:
+      [
+        "celery",
+        "-A",
+        "config",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=1",
+        "--queues=maintenance",
+        "--hostname=maintenance@%h",
+      ]
+    cpus: 0.5
+    mem_limit: 768m
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
   worker-recommendations:
     build: .
     restart: unless-stopped

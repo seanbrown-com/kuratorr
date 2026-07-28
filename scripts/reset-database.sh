@@ -30,6 +30,7 @@ KURATORR_SERVICES=(
   kuratorr-web
   kuratorr-worker
   kuratorr-worker-enrichment
+  kuratorr-worker-maintenance
   kuratorr-worker-recommendations
   kuratorr-worker-playlists
   kuratorr-beat

@@ -100,6 +100,7 @@ runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" colle
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-web.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-enrichment.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-maintenance.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-recommendations.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-playlists.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-beat.service" /etc/systemd/system/
@@ -114,6 +115,7 @@ systemctl enable --now \
   kuratorr-web \
   kuratorr-worker \
   kuratorr-worker-enrichment \
+  kuratorr-worker-maintenance \
   kuratorr-worker-recommendations \
   kuratorr-worker-playlists \
   kuratorr-beat \

@@ -35,22 +35,30 @@ After editing units or `.env`:
 ```bash
 systemctl daemon-reload
 systemctl restart kuratorr-web kuratorr-worker kuratorr-worker-enrichment \
-  kuratorr-worker-recommendations kuratorr-worker-playlists kuratorr-beat
+  kuratorr-worker-maintenance kuratorr-worker-recommendations \
+  kuratorr-worker-playlists kuratorr-beat
 ```
 
 ## Observe
 
 ```bash
 systemctl status kuratorr-web kuratorr-worker kuratorr-worker-enrichment \
-  kuratorr-worker-recommendations kuratorr-worker-playlists kuratorr-beat
+  kuratorr-worker-maintenance kuratorr-worker-recommendations \
+  kuratorr-worker-playlists kuratorr-beat
 journalctl -u kuratorr-worker-enrichment -f
+journalctl -u kuratorr-worker-maintenance -f
 nginx -t
 curl -fsS https://YOUR_DOMAIN/health/
 ```
 
 ## Update and recover
 
-Run `scripts/update-from-git.sh` as root. The updater prints and times every stage, shows verbose PostgreSQL backup progress, refuses concurrent update runs, and disables interactive Git credential prompts. Backups are written under `/var/backups/kuratorr` before code or schema changes. Retention is intentionally left to the host's backup policy. Custom-format backups use fast level-1 compression by default. Override it with `KURATORR_BACKUP_COMPRESSION` (`0` favors maximum speed and disk usage); the stage timeouts can be overridden with `KURATORR_BACKUP_TIMEOUT`, `KURATORR_GIT_TIMEOUT`, `KURATORR_PACKAGE_TIMEOUT`, and `KURATORR_DJANGO_TIMEOUT`.
+Run `scripts/update-from-git.sh` as root. The updater prints and times every stage, shows verbose PostgreSQL backup progress, refuses concurrent update runs, and disables interactive Git credential prompts. It installs updated unit files and stops Kuratorr application services before migrations, preventing worker transactions from blocking schema locks; an exit trap restarts the services if migration or static collection fails. Backups are written under `/var/backups/kuratorr` before code or schema changes. Retention is intentionally left to the host's backup policy. Custom-format backups use fast level-1 compression by default. Override it with `KURATORR_BACKUP_COMPRESSION` (`0` favors maximum speed and disk usage); the stage timeouts can be overridden with `KURATORR_BACKUP_TIMEOUT`, `KURATORR_GIT_TIMEOUT`, `KURATORR_PACKAGE_TIMEOUT`, and `KURATORR_DJANGO_TIMEOUT`.
+
+Threshold reconciliation runs on the dedicated `kuratorr-worker-maintenance`
+service. It has one worker process, reduced CPU priority, a 50% CPU quota, and
+bounded memory controls so it cannot starve the web service. Monitor it with
+`journalctl -u kuratorr-worker-maintenance -f`.
 
 To restore a backup, stop application services, create/empty the target database according to your recovery policy, then use `pg_restore`. Test restoration on a non-production database before relying on it.
 

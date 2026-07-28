@@ -5,7 +5,7 @@
 - **Django/Gunicorn:** authenticated operator UI, configuration, review, and exports.
 - **PostgreSQL:** canonical library entities, source observations, job history, review state, and playlist snapshots.
 - **Redis/Celery:** durable asynchronous work split across independent control,
-  enrichment, recommendations, and playlists queues.
+  enrichment, maintenance, recommendations, and playlists queues.
 - **Celery Beat:** periodically queues a bounded number of artists whose configured sources have not yet been attempted and requeues failed provider work only after its stored retry time.
 - **Nginx:** public TLS termination, static files, proxy headers, and request-size limits.
 
@@ -29,10 +29,11 @@
 5. Track matching compares whole normalized titles after removing common edition
    and featured-artist suffixes. The stored title is not changed, allowing a
    featured song to receive noteworthy evidence and appear in playlists. A score
-   at or above the configurable auto-accept threshold (default 0.95) is accepted,
+   at or above the configurable auto-accept threshold (default 0.90) is accepted,
    scores from the Review threshold (default 0.85) enter Review, and lower scores
    are rejected automatically.
-6. YouTube additionally requires an official-video confidence threshold and excludes known non-video formats.
+6. YouTube requires official-video evidence, excludes known non-video formats,
+   and uses the same global title-match thresholds as every other source.
 7. Accepted evidence contributes to playlists. Pending/rejected evidence does not.
 
 Wikipedia table/list parsing removes rendered citation nodes and trailing
@@ -63,14 +64,20 @@ Jobs progress through queued, running, succeeded, failed, or cancelled states. A
 
 Celery tasks are idempotent at their database boundaries: local files use `update_or_create`, source records use source/kind/external-ID uniqueness, evidence has source-specific uniqueness, and playlists use stable definition keys.
 
-Control/scanning, enrichment, recommendations, and playlist generation use
-dedicated queues and worker pools. Recommendation and playlist workers each have
-concurrency one, serializing their replace/regenerate operations. Enrichment may
-run concurrently across artists, but album-genre reconciliation is scoped to the
-current artist and transactions remain short and entity-specific. PostgreSQL
-row-level locking therefore does not couple the independent queues during normal
-operation. Workers prefetch one task per process so a worker does not reserve a
-large invisible batch ahead of other work in its queue.
+Control/scanning, enrichment, threshold reconciliation, recommendations, and
+playlist generation use dedicated queues and worker pools. Recommendation,
+maintenance, and playlist workers each have concurrency one. Threshold
+reconciliation processes one artist at a time, defers provider payloads, indexes
+normalized local titles, and writes compact disposable staging rows in bounded
+batches before its final guarded commit. The maintenance worker has reduced CPU
+priority and resource limits so reconciliation cannot starve the web service. A monotonically
+increasing settings revision prevents superseded threshold results from
+committing. Enrichment may run concurrently across artists, but album-genre
+reconciliation is scoped to the current artist and transactions remain short
+and entity-specific. PostgreSQL row-level locking therefore does not couple the
+independent queues during normal operation. Workers prefetch one task per
+process so a worker does not reserve a large invisible batch ahead of other work
+in its queue.
 
 External clients use a Redis-backed provider circuit breaker. A 429 response prevents every worker from calling that provider again during the cooldown, honors `Retry-After` when supplied, and applies persistent exponential backoff per artist/source. YouTube daily-quota exhaustion opens a 24-hour cooldown. The continuation task requeues no more than five eligible failed sources per five-minute cycle, skips providers with an active shared cooldown, and leases each queued retry for 24 hours to prevent duplicate dispatch behind a large backlog.
 

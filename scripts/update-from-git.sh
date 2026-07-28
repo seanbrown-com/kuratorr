@@ -5,18 +5,35 @@ log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
-trap 'status=$?; log "Update failed at line $LINENO (exit $status)." >&2' ERR
-
 if [[ $EUID -ne 0 ]]; then log "Run as root." >&2; exit 1; fi
 APP_DIR=/opt/kuratorr
 KURATORR_SERVICES=(
   kuratorr-web
   kuratorr-worker
   kuratorr-worker-enrichment
+  kuratorr-worker-maintenance
   kuratorr-worker-recommendations
   kuratorr-worker-playlists
   kuratorr-beat
 )
+SERVICES_STOPPED=0
+FAILURE_LINE=unknown
+
+finish_update() {
+  status=$?
+  trap - EXIT
+  if [[ $status -ne 0 ]]; then
+    log "Update failed near line $FAILURE_LINE (exit $status)." >&2
+  fi
+  if [[ $SERVICES_STOPPED -eq 1 ]]; then
+    log "Restarting Kuratorr services after interrupted update..."
+    systemctl start "${KURATORR_SERVICES[@]}" || true
+  fi
+  exit "$status"
+}
+
+trap 'FAILURE_LINE=$LINENO' ERR
+trap finish_update EXIT
 STAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_FILE="/var/backups/kuratorr/kuratorr-$STAMP.dump"
 BACKUP_TIMEOUT=${KURATORR_BACKUP_TIMEOUT:-30m}
@@ -59,6 +76,21 @@ timeout --foreground "$PACKAGE_TIMEOUT" \
   env PIP_DEFAULT_TIMEOUT=60 \
   "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -r "$APP_DIR/requirements.txt"
 
+log "Installing systemd service definitions..."
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-web.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-enrichment.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-maintenance.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-recommendations.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-playlists.service" /etc/systemd/system/
+install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-beat.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable "${KURATORR_SERVICES[@]}"
+
+log "Stopping Kuratorr services before database migration..."
+SERVICES_STOPPED=1
+systemctl stop "${KURATORR_SERVICES[@]}"
+
 log "Applying database migrations (timeout: $DJANGO_TIMEOUT)..."
 timeout --foreground "$DJANGO_TIMEOUT" \
   runuser -u kuratorr -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" migrate --noinput
@@ -67,18 +99,9 @@ log "Collecting static assets (timeout: $DJANGO_TIMEOUT)..."
 timeout --foreground "$DJANGO_TIMEOUT" \
   runuser -u kuratorr -- "$APP_DIR/.venv/bin/python" "$APP_DIR/manage.py" collectstatic --noinput
 
-log "Installing systemd service definitions..."
-install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-web.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-enrichment.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-recommendations.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-worker-playlists.service" /etc/systemd/system/
-install -m 0644 "$APP_DIR/deploy/systemd/kuratorr-beat.service" /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable "${KURATORR_SERVICES[@]}"
-
 log "Restarting Kuratorr services..."
 systemctl restart "${KURATORR_SERVICES[@]}"
+SERVICES_STOPPED=0
 systemctl reload nginx
 
 log "Service status:"

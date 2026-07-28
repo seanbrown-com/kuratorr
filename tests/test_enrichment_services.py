@@ -17,6 +17,7 @@ from enrichment.models import (
     Decision,
     ExternalTrack,
     MissingAlbum,
+    NoteworthyDecisionStage,
     NoteworthyEvidence,
     RelatedArtistEvidence,
     Source,
@@ -875,6 +876,85 @@ def test_cancelled_refresh_does_not_commit_partial_decisions(track, artist):
     assert evidence.decision == Decision.PENDING
     assert external.match_confidence == Decimal("0.500")
     assert external.match_decision == Decision.PENDING
+    assert not NoteworthyDecisionStage.objects.exists()
+
+
+@pytest.mark.django_db
+def test_stale_settings_revision_cannot_commit_reconciliation(track, artist):
+    record = SourceRecord.objects.create(
+        source=Source.LASTFM,
+        entity_kind="track",
+        external_id="stale-settings-revision",
+        fetched_at=timezone.now(),
+    )
+    external = ExternalTrack.objects.create(
+        source_record=record,
+        artist=artist,
+        artist_name=artist.name,
+        title=track.title,
+        rank=1,
+        playcount=10000,
+        match_confidence=Decimal("0.500"),
+        match_decision=Decision.PENDING,
+    )
+    evidence = NoteworthyEvidence.objects.create(
+        artist=artist,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        confidence=Decimal("0.500"),
+        decision=Decision.PENDING,
+    )
+    settings = ServiceSettings.load()
+    settings.noteworthy_decision_revision = 2
+    settings.save(update_fields=["noteworthy_decision_revision", "updated_at"])
+
+    with pytest.raises(JobCancelled, match="settings changed"):
+        refresh_noteworthy_decisions(
+            artist,
+            expected_settings_revision=1,
+        )
+
+    evidence.refresh_from_db()
+    external.refresh_from_db()
+    assert evidence.confidence == Decimal("0.500")
+    assert evidence.decision == Decision.PENDING
+    assert external.match_confidence == Decimal("0.500")
+    assert external.match_decision == Decision.PENDING
+    assert not NoteworthyDecisionStage.objects.exists()
+
+
+@pytest.mark.django_db
+def test_non_youtube_reconciliation_does_not_load_source_payload(track, artist):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    record = SourceRecord.objects.create(
+        source=Source.LASTFM,
+        entity_kind="track",
+        external_id="payload-must-remain-deferred",
+        fetched_at=timezone.now(),
+        payload={"large": "value" * 1000},
+    )
+    external = ExternalTrack.objects.create(
+        source_record=record,
+        artist=artist,
+        artist_name=artist.name,
+        title=track.title,
+        rank=1,
+        playcount=10000,
+    )
+    NoteworthyEvidence.objects.create(
+        artist=artist,
+        external_track=external,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+    )
+
+    with CaptureQueriesContext(connection) as queries:
+        refresh_noteworthy_decisions(artist)
+
+    assert not any(
+        '"enrichment_sourcerecord"."payload"' in query["sql"] for query in queries.captured_queries
+    )
 
 
 @pytest.mark.django_db
@@ -1449,5 +1529,6 @@ def test_celery_tasks_are_routed_to_independent_queues(settings):
     assert (
         routes["enrichment.tasks.refresh_artist_recommendations_task"]["queue"] == "recommendations"
     )
+    assert routes["enrichment.tasks.refresh_noteworthy_decisions_task"]["queue"] == "maintenance"
     assert routes["playlists.tasks.*"]["queue"] == "playlists"
     assert routes["library.tasks.*"]["queue"] == "control"

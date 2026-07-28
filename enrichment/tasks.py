@@ -24,7 +24,7 @@ from enrichment.services import (
     refresh_artist_recommendations,
     refresh_noteworthy_decisions,
 )
-from library.models import Artist
+from library.models import Artist, ServiceSettings
 
 ENRICHERS = {
     "musicbrainz": enrich_musicbrainz,
@@ -100,7 +100,10 @@ def enrich_artist_task(self, artist_id, source=None, job_id=None):
             summary["deferred_sources"] = deferred_sources
         finish_job(job, JobRun.Status.SUCCEEDED, summary=summary)
         return summary
-    except JobCancelled:
+    except JobCancelled as exc:
+        job.refresh_from_db()
+        if job.status in [JobRun.Status.QUEUED, JobRun.Status.RUNNING]:
+            finish_job(job, JobRun.Status.CANCELLED, error=str(exc))
         return {"cancelled": True}
     except Exception as exc:
         finish_job(job, JobRun.Status.FAILED, error=str(exc))
@@ -180,7 +183,7 @@ def run_pending_enrichments():
 
 
 @shared_task(bind=True, priority=CONTROL_PRIORITY)
-def refresh_noteworthy_decisions_task(self, job_id=None):
+def refresh_noteworthy_decisions_task(self, job_id=None, settings_revision=None):
     job = (
         JobRun.objects.get(pk=job_id)
         if job_id
@@ -188,8 +191,11 @@ def refresh_noteworthy_decisions_task(self, job_id=None):
     )
     try:
         start_job(job, self.request.id or "")
+        if settings_revision is None:
+            settings_revision = ServiceSettings.load().noteworthy_decision_revision
         summary = refresh_noteworthy_decisions(
-            cancellation_check=lambda **progress: touch_job(job.pk, **progress)
+            cancellation_check=lambda **progress: touch_job(job.pk, **progress),
+            expected_settings_revision=settings_revision,
         )
         finish_job(job, JobRun.Status.SUCCEEDED, summary=summary)
         return summary

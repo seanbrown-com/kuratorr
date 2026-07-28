@@ -663,9 +663,15 @@ def test_threshold_save_replaces_active_reconciliation_job(client, django_user_m
         "enrichment.job_control.current_app.control.revoke",
         lambda task_id, terminate=False: revoked.append((task_id, terminate)),
     )
+    queued_revisions = []
+
+    def queue_reconciliation(job_id, settings_revision):
+        queued_revisions.append(settings_revision)
+        return type("Result", (), {"id": f"task-{job_id}"})()
+
     monkeypatch.setattr(
         "dashboard.views.refresh_noteworthy_decisions_task.delay",
-        lambda job_id: type("Result", (), {"id": f"task-{job_id}"})(),
+        queue_reconciliation,
     )
     client.force_login(user)
 
@@ -695,6 +701,7 @@ def test_threshold_save_replaces_active_reconciliation_job(client, django_user_m
         status__in=[JobRun.Status.QUEUED, JobRun.Status.RUNNING],
     )
     assert active.celery_task_id == f"task-{active.pk}"
+    assert queued_revisions == [1]
 
     payload["track_match_auto_accept_threshold"] = "0.920"
     response = client.post(reverse("settings"), payload)
@@ -709,6 +716,7 @@ def test_threshold_save_replaces_active_reconciliation_job(client, django_user_m
         ).count()
         == 1
     )
+    assert queued_revisions == [1, 2]
 
 
 @pytest.mark.django_db

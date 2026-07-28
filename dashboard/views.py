@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
+from django.db.models import F
 from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
@@ -216,17 +217,24 @@ def settings_view(request):
             messages.success(request, "Playlist output directory saved.")
             return redirect("settings")
     elif request.method == "POST" and form.is_valid():
-        form.save()
+        saved_settings = form.save()
         if form.updated_sources:
             ArtistSourceStatus.objects.filter(source__in=form.updated_sources).delete()
         if any(
             form.cleaned_data[field] != original_decision_values[field] for field in decision_fields
         ):
+            ServiceSettings.objects.filter(pk=saved_settings.pk).update(
+                noteworthy_decision_revision=F("noteworthy_decision_revision") + 1
+            )
+            saved_settings.refresh_from_db(fields=["noteworthy_decision_revision"])
             job = replace_active_job(
                 "refresh_noteworthy_decisions",
                 requested_manually=True,
             )
-            result = refresh_noteworthy_decisions_task.delay(job_id=job.pk)
+            result = refresh_noteworthy_decisions_task.delay(
+                job_id=job.pk,
+                settings_revision=saved_settings.noteworthy_decision_revision,
+            )
             job.celery_task_id = result.id
             job.save(update_fields=["celery_task_id", "updated_at"])
         messages.success(request, "Settings saved.")

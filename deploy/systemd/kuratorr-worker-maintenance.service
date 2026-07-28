@@ -1,0 +1,28 @@
+[Unit]
+Description=Kuratorr low-priority maintenance worker
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=kuratorr
+Group=kuratorr
+WorkingDirectory=/opt/kuratorr
+EnvironmentFile=/opt/kuratorr/.env
+ExecStart=/opt/kuratorr/.venv/bin/celery -A config worker --loglevel=INFO --concurrency=1 --queues=maintenance --hostname=maintenance@%%h
+Restart=always
+RestartSec=5
+TimeoutStopSec=30s
+Nice=10
+CPUWeight=10
+CPUQuota=50%
+MemoryHigh=512M
+MemoryMax=768M
+OOMScoreAdjust=500
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
