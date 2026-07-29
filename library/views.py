@@ -4,14 +4,16 @@ from pathlib import Path
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Count, Q
+from django.db import transaction
+from django.db.models import Count, Exists, OuterRef, Q
 from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
 from dashboard.sorting import apply_sorting
 from enrichment.job_control import reconcile_stale_jobs
-from enrichment.models import JobRun
+from enrichment.models import Decision, JobRun, NoteworthyEvidence
 from library.forms import LibraryRootForm
 from library.models import Artist, LibraryRoot, Track
 from library.services import delete_library_root
@@ -74,6 +76,14 @@ def artist_list(request):
         .annotate(
             album_count=Count("albums", distinct=True),
             track_count=Count("tracks", filter=Q(tracks__is_available=True), distinct=True),
+            notable_track_count=Count(
+                "tracks",
+                filter=Q(
+                    tracks__is_available=True,
+                    tracks__noteworthy_evidence__decision=Decision.ACCEPTED,
+                ),
+                distinct=True,
+            ),
         )
         .distinct()
     )
@@ -102,11 +112,62 @@ def artist_detail(request, pk):
     artist = get_object_or_404(Artist, pk=pk)
     from playlists.services import noteworthy_tracks
 
+    accepted_evidence = NoteworthyEvidence.objects.filter(
+        track_id=OuterRef("pk"),
+        decision=Decision.ACCEPTED,
+    )
+    tracks = (
+        artist.tracks.filter(is_available=True)
+        .select_related("album")
+        .annotate(is_notable=Exists(accepted_evidence))
+    )
     return render(
         request,
         "library/artist_detail.html",
-        {"artist": artist, "greatest_hits": noteworthy_tracks(artist)},
+        {
+            "artist": artist,
+            "greatest_hits": noteworthy_tracks(artist),
+            "tracks": tracks,
+        },
     )
+
+
+@require_POST
+@login_required
+def mark_track_notable(request, pk, track_pk):
+    note = "Manually marked as notable from the artist page."
+    with transaction.atomic():
+        artist = get_object_or_404(Artist.objects.select_for_update(), pk=pk)
+        track = get_object_or_404(
+            Track,
+            pk=track_pk,
+            artist=artist,
+            is_available=True,
+        )
+        manual_evidence = NoteworthyEvidence.objects.filter(
+            artist=artist,
+            track=track,
+            external_track=None,
+            evidence_type=NoteworthyEvidence.EvidenceType.MANUAL,
+        )
+        if not manual_evidence.update(
+            confidence=1,
+            decision=Decision.ACCEPTED,
+            decision_is_manual=True,
+            notes=note,
+            updated_at=timezone.now(),
+        ):
+            NoteworthyEvidence.objects.create(
+                artist=artist,
+                track=track,
+                evidence_type=NoteworthyEvidence.EvidenceType.MANUAL,
+                confidence=1,
+                decision=Decision.ACCEPTED,
+                decision_is_manual=True,
+                notes=note,
+            )
+    messages.success(request, f"{track.title} added to Notable Tracks/Singles.")
+    return redirect("artist-detail", pk=artist.pk)
 
 
 @login_required

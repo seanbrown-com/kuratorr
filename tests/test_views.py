@@ -103,6 +103,45 @@ def test_artist_page_uses_searchable_table(client, django_user_model, track):
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
+def test_artist_page_can_permanently_mark_a_track_notable(client, django_user_model, artist, track):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+    action_url = reverse("mark-track-notable", args=[artist.pk, track.pk])
+
+    detail = client.get(reverse("artist-detail", args=[artist.pk]))
+    assert action_url.encode() in detail.content
+
+    response = client.post(action_url)
+
+    assert response.status_code == 302
+    evidence = NoteworthyEvidence.objects.get(
+        artist=artist,
+        track=track,
+        evidence_type=NoteworthyEvidence.EvidenceType.MANUAL,
+    )
+    assert evidence.decision == Decision.ACCEPTED
+    assert evidence.decision_is_manual is True
+    assert evidence.confidence == Decimal("1.000")
+
+    client.post(action_url)
+    assert (
+        NoteworthyEvidence.objects.filter(
+            artist=artist,
+            track=track,
+            evidence_type=NoteworthyEvidence.EvidenceType.MANUAL,
+        ).count()
+        == 1
+    )
+    detail = client.get(reverse("artist-detail", args=[artist.pk]))
+    assert track in detail.context["greatest_hits"]
+    assert action_url.encode() not in detail.content
+    assert b"Already notable" in detail.content
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
 def test_dashboard_pipeline_contains_only_icon_buttons(client, django_user_model):
     user = django_user_model.objects.create_superuser(
         "admin", password="Very-Long-Test-Passphrase!"
@@ -139,6 +178,9 @@ def test_playlist_downloads_use_server_paths_and_bulk_zip(client, django_user_mo
         confidence=Decimal("1"),
         decision=Decision.ACCEPTED,
     )
+    service_settings = ServiceSettings.load()
+    service_settings.minimum_playlist_tracks = 1
+    service_settings.save(update_fields=["minimum_playlist_tracks", "updated_at"])
     generate_artist_playlists()
     playlist = Playlist.objects.get()
     client.force_login(user)
@@ -588,7 +630,7 @@ def test_settings_page_encrypts_api_credentials(client, django_user_model):
             "lastfm_min_playcount": 1000,
             "lastfm_max_tracks": 50,
             "lastfm_noteworthy_max_rank": 2,
-            "minimum_playlist_seconds": 3600,
+            "minimum_playlist_tracks": 25,
             "max_album_genres": 3,
             "spotify_market": "US",
             "youtube_max_results": 25,
@@ -633,7 +675,7 @@ def test_http_user_agent_save_does_not_run_synchronous_reconciliation(
             "lastfm_min_playcount": 1000,
             "lastfm_max_tracks": 50,
             "lastfm_noteworthy_max_rank": 2,
-            "minimum_playlist_seconds": 3600,
+            "minimum_playlist_tracks": 25,
             "max_album_genres": 3,
             "spotify_market": "US",
             "youtube_max_results": 25,
@@ -681,7 +723,7 @@ def test_threshold_save_replaces_active_reconciliation_job(client, django_user_m
         "lastfm_min_playcount": 1000,
         "lastfm_max_tracks": 50,
         "lastfm_noteworthy_max_rank": 2,
-        "minimum_playlist_seconds": 3600,
+        "minimum_playlist_tracks": 25,
         "max_album_genres": 3,
         "spotify_market": "US",
         "youtube_max_results": 25,

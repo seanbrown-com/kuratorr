@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from enrichment.models import Decision, NoteworthyEvidence, RelatedArtistEvidence
 from library.models import Artist, ServiceSettings
+from library.services import has_feature_credit
 from playlists.models import Playlist, PlaylistOutputRoot, PlaylistTrack
 
 PLAYLIST_DIRECTORIES = {
@@ -48,6 +49,31 @@ def noteworthy_tracks(artist=None):
 def _definition_key(playlist_type, **values):
     parts = [playlist_type] + [f"{key}={values[key]}" for key in sorted(values)]
     return "|".join(parts)
+
+
+def _unique_tracks(tracks):
+    return list({track.pk: track for track in tracks}.values())
+
+
+def _minimum_tracks():
+    return ServiceSettings.load().minimum_playlist_tracks
+
+
+def _prune_obsolete_playlists(playlist_types, retained_keys):
+    obsolete = Playlist.objects.filter(
+        playlist_type__in=playlist_types,
+        deleted_at=None,
+        never_regenerate=False,
+    )
+    if retained_keys:
+        obsolete = obsolete.exclude(definition_key__in=retained_keys)
+    for playlist in obsolete:
+        if playlist.output_path:
+            try:
+                Path(playlist.output_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    obsolete.delete()
 
 
 @transaction.atomic
@@ -94,19 +120,25 @@ def _year_for(track):
 
 
 def generate_artist_playlists():
+    minimum = _minimum_tracks()
     count = 0
+    retained_keys = set()
     for artist in Artist.objects.all():
-        tracks = noteworthy_tracks(artist)
-        if tracks:
+        if has_feature_credit(artist.name):
+            continue
+        tracks = _unique_tracks(noteworthy_tracks(artist))
+        if len(tracks) >= minimum:
+            retained_keys.add(_definition_key(Playlist.PlaylistType.ARTIST, artist=artist.pk))
             _, written = upsert_playlist(
                 f"Best of {artist.name}", Playlist.PlaylistType.ARTIST, tracks, artist=artist
             )
             count += int(written)
+    _prune_obsolete_playlists([Playlist.PlaylistType.ARTIST], retained_keys)
     return count
 
 
 def generate_grouped_playlists():
-    minimum = ServiceSettings.load().minimum_playlist_seconds
+    minimum = _minimum_tracks()
     tracks = noteworthy_tracks()
     years = defaultdict(list)
     decades = defaultdict(list)
@@ -124,19 +156,20 @@ def generate_grouped_playlists():
                 genre_years[(assignment.genre, year)].append(track)
                 genre_decades[(assignment.genre, (year // 10) * 10)].append(track)
     created = 0
+    retained_keys = set()
 
     def enough(items):
-        return (
-            sum(int(x.duration_seconds or 0) for x in {x.pk: x for x in items}.values()) >= minimum
-        )
+        return len(_unique_tracks(items)) >= minimum
 
     for year, items in years.items():
         if enough(items):
+            retained_keys.add(_definition_key(Playlist.PlaylistType.YEAR, year=year))
             created += int(
                 upsert_playlist(f"Best of {year}", Playlist.PlaylistType.YEAR, items, year=year)[1]
             )
     for decade, items in decades.items():
         if enough(items):
+            retained_keys.add(_definition_key(Playlist.PlaylistType.DECADE, decade=decade))
             created += int(
                 upsert_playlist(
                     f"Best of the {decade}s", Playlist.PlaylistType.DECADE, items, decade=decade
@@ -144,6 +177,7 @@ def generate_grouped_playlists():
             )
     for genre, items in genres.items():
         if enough(items):
+            retained_keys.add(_definition_key(Playlist.PlaylistType.GENRE, genre=genre.pk))
             created += int(
                 upsert_playlist(
                     f"Best of {genre.name}", Playlist.PlaylistType.GENRE, items, genre=genre
@@ -151,6 +185,9 @@ def generate_grouped_playlists():
             )
     for (genre, year), items in genre_years.items():
         if enough(items):
+            retained_keys.add(
+                _definition_key(Playlist.PlaylistType.GENRE_YEAR, genre=genre.pk, year=year)
+            )
             created += int(
                 upsert_playlist(
                     f"Best of {year} {genre.name}",
@@ -162,6 +199,13 @@ def generate_grouped_playlists():
             )
     for (genre, decade), items in genre_decades.items():
         if enough(items):
+            retained_keys.add(
+                _definition_key(
+                    Playlist.PlaylistType.GENRE_DECADE,
+                    genre=genre.pk,
+                    decade=decade,
+                )
+            )
             created += int(
                 upsert_playlist(
                     f"{decade}s {genre.name} Hits",
@@ -171,14 +215,29 @@ def generate_grouped_playlists():
                     decade=decade,
                 )[1]
             )
+    _prune_obsolete_playlists(
+        [
+            Playlist.PlaylistType.YEAR,
+            Playlist.PlaylistType.DECADE,
+            Playlist.PlaylistType.GENRE,
+            Playlist.PlaylistType.GENRE_YEAR,
+            Playlist.PlaylistType.GENRE_DECADE,
+        ],
+        retained_keys,
+    )
     return created
 
 
 def generate_radio_playlists():
-    minimum = ServiceSettings.load().minimum_playlist_seconds
+    minimum = _minimum_tracks()
     created = 0
+    retained_keys = set()
     for artist in Artist.objects.all():
+        if has_feature_credit(artist.name):
+            continue
         primary = noteworthy_tracks(artist)
+        if not primary:
+            continue
         related_ids = RelatedArtistEvidence.objects.filter(
             artist=artist,
             decision=Decision.ACCEPTED,
@@ -186,6 +245,8 @@ def generate_radio_playlists():
         ).values_list("related_artist_id", flat=True)
         related = []
         for related_artist in Artist.objects.filter(pk__in=related_ids):
+            if has_feature_credit(related_artist.name):
+                continue
             related.extend(noteworthy_tracks(related_artist)[:10])
         combined = []
         while primary or related:
@@ -193,14 +254,14 @@ def generate_radio_playlists():
                 combined.append(primary.pop(0))
             if related:
                 combined.append(related.pop(0))
-        if (
-            sum(int(x.duration_seconds or 0) for x in {x.pk: x for x in combined}.values())
-            >= minimum
-        ):
+        combined = _unique_tracks(combined)
+        if len(combined) >= minimum:
+            retained_keys.add(_definition_key(Playlist.PlaylistType.ARTIST_RADIO, artist=artist.pk))
             _, written = upsert_playlist(
                 f"{artist.name} Radio", Playlist.PlaylistType.ARTIST_RADIO, combined, artist=artist
             )
             created += int(written)
+    _prune_obsolete_playlists([Playlist.PlaylistType.ARTIST_RADIO], retained_keys)
     return created
 
 

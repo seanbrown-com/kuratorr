@@ -51,7 +51,7 @@ class ServiceSettingsForm(forms.ModelForm):
             "lastfm_min_playcount",
             "lastfm_max_tracks",
             "lastfm_noteworthy_max_rank",
-            "minimum_playlist_seconds",
+            "minimum_playlist_tracks",
             "max_album_genres",
             "spotify_market",
             "youtube_max_results",

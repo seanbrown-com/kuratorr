@@ -85,8 +85,11 @@ External clients use a Redis-backed provider circuit breaker. A 429 response pre
 
 ## Playlist semantics
 
-- Best of Artist has no one-hour requirement, because a small local catalog should still produce an artist playlist.
-- Year, decade, genre, combined genre/time, and radio playlists require the configured minimum duration.
+- Every generated playlist type requires the configured minimum number of
+  distinct tracks (25 by default).
+- Best of Artist and Artist Radio generation excludes artist rows containing
+  `feat.`, `ft.`, or `featuring`; regeneration prunes legacy playlists created
+  for those collaborative credits.
 - Year uses the track year and falls back to album year.
 - Album genre assignments—not artist-wide genres—drive genre playlists.
 - Radio alternates the seed artist's accepted hits with accepted related local artists' hits.

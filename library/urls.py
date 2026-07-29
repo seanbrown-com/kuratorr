@@ -6,6 +6,11 @@ urlpatterns = [
     path("", views.track_list, name="track-list"),
     path("artists/", views.artist_list, name="artist-list"),
     path("artists/<int:pk>/", views.artist_detail, name="artist-detail"),
+    path(
+        "artists/<int:pk>/tracks/<int:track_pk>/mark-notable/",
+        views.mark_track_notable,
+        name="mark-track-notable",
+    ),
     path("roots/", views.root_list, name="root-list"),
     path("roots/<int:pk>/scan/", views.scan_root, name="scan-root"),
     path("roots/<int:pk>/delete/", views.delete_root, name="delete-root"),

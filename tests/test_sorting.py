@@ -34,6 +34,20 @@ def login_admin(client, django_user_model):
 def test_artist_sorting_defaults_to_name_and_supports_counts(
     client, django_user_model, root, artist, album, track
 ):
+    NoteworthyEvidence.objects.create(
+        artist=artist,
+        track=track,
+        evidence_type=NoteworthyEvidence.EvidenceType.MANUAL,
+        confidence=Decimal("1.0"),
+        decision=Decision.ACCEPTED,
+    )
+    NoteworthyEvidence.objects.create(
+        artist=artist,
+        track=track,
+        evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+        confidence=Decimal("1.0"),
+        decision=Decision.ACCEPTED,
+    )
     second_artist = Artist.objects.create(
         name="Alice in Chains", sort_name="Alice in Chains", normalized_name="alice in chains"
     )
@@ -62,6 +76,10 @@ def test_artist_sorting_defaults_to_name_and_supports_counts(
         "Alice in Chains",
         "Deftones",
     ]
+    artists_by_name = {item.name: item for item in response.context["page"].object_list}
+    assert artists_by_name["Alice in Chains"].notable_track_count == 0
+    assert artists_by_name["Deftones"].notable_track_count == 1
+    assert b"Notable Tracks/Singles" in response.content
 
     response = client.get(reverse("artist-list"), {"sort": "tracks", "direction": "desc"})
     assert response.context["page"].object_list[0].name == "Alice in Chains"

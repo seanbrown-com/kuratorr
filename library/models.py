@@ -23,7 +23,10 @@ class ServiceSettings(TimestampedModel):
     lastfm_min_playcount = models.PositiveBigIntegerField(default=1000)
     lastfm_max_tracks = models.PositiveSmallIntegerField(default=50)
     lastfm_noteworthy_max_rank = models.PositiveSmallIntegerField(default=2)
-    minimum_playlist_seconds = models.PositiveIntegerField(default=3600)
+    minimum_playlist_tracks = models.PositiveSmallIntegerField(
+        default=25,
+        help_text="Minimum number of distinct tracks required for any generated playlist.",
+    )
     max_album_genres = models.PositiveSmallIntegerField(default=3)
     spotify_market = models.CharField(max_length=2, default="US")
     youtube_max_results = models.PositiveSmallIntegerField(default=25)

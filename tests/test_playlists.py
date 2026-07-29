@@ -1,5 +1,6 @@
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -11,16 +12,21 @@ from playlists.services import (
     delete_playlist,
     generate_artist_playlists,
     generate_grouped_playlists,
+    generate_radio_playlists,
     materialize_playlist,
     render_copy_script,
     render_m3u,
     render_m3u_zip,
     restore_playlist,
+    upsert_playlist,
 )
 
 
 @pytest.fixture
 def evidence(track, artist):
+    settings = ServiceSettings.load()
+    settings.minimum_playlist_tracks = 1
+    settings.save(update_fields=["minimum_playlist_tracks", "updated_at"])
     return NoteworthyEvidence.objects.create(
         artist=artist,
         track=track,
@@ -39,14 +45,55 @@ def test_artist_playlist_generation(evidence, track, artist):
 
 
 @pytest.mark.django_db
-def test_grouped_playlist_requires_minimum_duration(evidence):
+def test_grouped_playlist_requires_minimum_track_count(evidence):
     settings = ServiceSettings.load()
-    settings.minimum_playlist_seconds = 3600
+    settings.minimum_playlist_tracks = 2
     settings.save()
     assert generate_grouped_playlists() == 0
-    settings.minimum_playlist_seconds = 60
+    settings.minimum_playlist_tracks = 1
     settings.save()
     assert generate_grouped_playlists() >= 2
+
+
+@pytest.mark.django_db
+def test_artist_playlist_below_minimum_is_pruned_with_materialized_file(evidence, artist, tmp_path):
+    PlaylistOutputRoot.objects.create(path=str(tmp_path), enabled=True)
+    generate_artist_playlists()
+    playlist = Playlist.objects.get(playlist_type=Playlist.PlaylistType.ARTIST)
+    output_path = materialize_playlist(playlist)[0]
+    settings = ServiceSettings.load()
+    settings.minimum_playlist_tracks = 2
+    settings.save(update_fields=["minimum_playlist_tracks", "updated_at"])
+
+    assert generate_artist_playlists() == 0
+
+    assert not Playlist.objects.filter(pk=playlist.pk).exists()
+    assert not Path(output_path).exists()
+
+
+@pytest.mark.django_db
+def test_featured_artist_playlists_are_pruned(evidence, track, artist):
+    artist_playlist, _ = upsert_playlist(
+        f"Best of {artist.name}",
+        Playlist.PlaylistType.ARTIST,
+        [track],
+        artist=artist,
+    )
+    radio_playlist, _ = upsert_playlist(
+        f"{artist.name} Radio",
+        Playlist.PlaylistType.ARTIST_RADIO,
+        [track],
+        artist=artist,
+    )
+    artist.name = "Deftones feat. Maynard James Keenan"
+    artist.normalized_name = "deftones feat maynard james keenan"
+    artist.save(update_fields=["name", "normalized_name", "updated_at"])
+
+    assert generate_artist_playlists() == 0
+    assert generate_radio_playlists() == 0
+
+    assert not Playlist.objects.filter(pk=artist_playlist.pk).exists()
+    assert not Playlist.objects.filter(pk=radio_playlist.pk).exists()
 
 
 @pytest.mark.django_db

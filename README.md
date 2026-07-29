@@ -16,7 +16,8 @@ Kuratorr is a private, single-administrator Django service that scans mounted MP
 - Compares MusicBrainz album catalogs with the local collection and lists absent releases with source-qualified notable tracks on a filterable Missing page.
 - Selects up to three genres per album, with manual assignments taking precedence.
 - Builds Best of Artist, Year, Decade, Genre, Genre+Year, Genre+Decade, and Artist Radio playlists.
-- Requires aggregate and radio playlists to meet the configurable minimum duration (one hour by default).
+- Requires every generated playlist to meet the configurable minimum track count
+  (25 distinct tracks by default).
 - Stores playlists and ordered entries in PostgreSQL, with optional atomic M3U materialization beneath one server output directory, organized by playlist type.
 - Supports soft deletion, permanent regeneration suppression, a deleted-playlist review screen, and restoration.
 - Downloads individual M3U files, a browser-delivered ZIP containing all active playlists in type folders, or a two-argument Bash script that copies a playlist into a same-named destination directory.
