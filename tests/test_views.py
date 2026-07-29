@@ -197,7 +197,7 @@ def test_playlist_downloads_use_server_paths_and_bulk_zip(client, django_user_mo
     assert response.status_code == 200
     assert response["Content-Type"] == "application/zip"
     with ZipFile(BytesIO(b"".join(response.streaming_content))) as archive:
-        assert track.full_path.encode() in archive.read("best of artist/Best_of_Deftones.m3u")
+        assert track.full_path.encode() in archive.read("best_of_artist/Best_of_Deftones.m3u")
 
 
 @pytest.mark.django_db
@@ -809,19 +809,34 @@ def test_settings_page_manages_playlist_output_directories(client, django_user_m
 
     response = client.post(
         reverse("settings"),
-        {"action": "save_playlist_output", "path": str(output_path), "enabled": "on"},
+        {
+            "action": "save_playlist_output",
+            "path": str(output_path),
+            "music_relative_path": "../..",
+            "enabled": "on",
+        },
     )
 
     assert response.status_code == 302
-    assert PlaylistOutputRoot.objects.filter(path=str(output_path), enabled=True).exists()
+    assert PlaylistOutputRoot.objects.filter(
+        path=str(output_path),
+        music_relative_path="../..",
+        enabled=True,
+    ).exists()
     body = client.get(reverse("settings")).content.decode()
     assert "Playlist output directory" in body
     assert str(output_path) in body
+    assert "M3U music path relative to output directory" in body
 
     replacement = tmp_path / "replacement-output"
     response = client.post(
         reverse("settings"),
-        {"action": "save_playlist_output", "path": str(replacement), "enabled": "on"},
+        {
+            "action": "save_playlist_output",
+            "path": str(replacement),
+            "music_relative_path": "../..",
+            "enabled": "on",
+        },
     )
     assert response.status_code == 302
     assert PlaylistOutputRoot.objects.count() == 1
@@ -873,4 +888,27 @@ def test_playlist_output_path_must_be_absolute(client, django_user_model):
 
     assert response.status_code == 200
     assert "playlist output path must be absolute" in response.content.decode().lower()
+    assert not PlaylistOutputRoot.objects.exists()
+
+
+@pytest.mark.django_db
+@override_settings(STORAGES=TEST_STORAGES)
+def test_playlist_music_mapping_must_be_relative(client, django_user_model):
+    user = django_user_model.objects.create_superuser(
+        "admin", password="Very-Long-Test-Passphrase!"
+    )
+    client.force_login(user)
+
+    response = client.post(
+        reverse("settings"),
+        {
+            "action": "save_playlist_output",
+            "path": "/mnt/playlists",
+            "music_relative_path": "/mnt/library/music",
+            "enabled": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "m3u music path must be relative" in response.content.decode().lower()
     assert not PlaylistOutputRoot.objects.exists()

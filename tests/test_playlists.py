@@ -133,7 +133,7 @@ def test_all_playlists_zip_uses_type_directories(evidence, track):
     generate_artist_playlists()
     content = render_m3u_zip(Playlist.objects.all())
     with ZipFile(BytesIO(content)) as archive:
-        assert archive.namelist() == ["best of artist/Best_of_Deftones.m3u"]
+        assert archive.namelist() == ["best_of_artist/Best_of_Deftones.m3u"]
         m3u = archive.read(archive.namelist()[0]).decode()
     assert track.full_path in m3u
 
@@ -146,6 +146,23 @@ def test_materialized_playlists_use_single_root_and_type_directory(evidence, tmp
 
     written = materialize_playlist(playlist)
 
-    expected = tmp_path / "best of artist" / "Best_of_Deftones.m3u"
+    expected = tmp_path / "best_of_artist" / "Best_of_Deftones.m3u"
     assert written == [str(expected)]
     assert expected.exists()
+
+
+@pytest.mark.django_db
+def test_relative_music_mapping_accounts_for_playlist_type_directory(evidence, track, tmp_path):
+    generate_artist_playlists()
+    playlist = Playlist.objects.get()
+    PlaylistOutputRoot.objects.create(
+        path=str(tmp_path),
+        music_relative_path="../..",
+        enabled=True,
+    )
+
+    written = Path(materialize_playlist(playlist)[0])
+
+    assert written == tmp_path / "best_of_artist" / "Best_of_Deftones.m3u"
+    assert "../../../Change.mp3" in written.read_text(encoding="utf-8")
+    assert track.full_path not in written.read_text(encoding="utf-8")

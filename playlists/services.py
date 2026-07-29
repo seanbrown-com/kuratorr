@@ -1,3 +1,4 @@
+import posixpath
 import re
 import shlex
 from collections import defaultdict
@@ -14,13 +15,13 @@ from library.services import has_feature_credit
 from playlists.models import Playlist, PlaylistOutputRoot, PlaylistTrack
 
 PLAYLIST_DIRECTORIES = {
-    Playlist.PlaylistType.ARTIST: "best of artist",
-    Playlist.PlaylistType.YEAR: "best of year",
-    Playlist.PlaylistType.DECADE: "best of decades",
-    Playlist.PlaylistType.GENRE: "best of genres",
-    Playlist.PlaylistType.GENRE_YEAR: "genres by year",
-    Playlist.PlaylistType.GENRE_DECADE: "genres by decade",
-    Playlist.PlaylistType.ARTIST_RADIO: "artist radio",
+    Playlist.PlaylistType.ARTIST: "best_of_artist",
+    Playlist.PlaylistType.YEAR: "best_of_year",
+    Playlist.PlaylistType.DECADE: "best_of_decades",
+    Playlist.PlaylistType.GENRE: "best_of_genres",
+    Playlist.PlaylistType.GENRE_YEAR: "genres_by_year",
+    Playlist.PlaylistType.GENRE_DECADE: "genres_by_decade",
+    Playlist.PlaylistType.ARTIST_RADIO: "artist_radio",
 }
 
 
@@ -270,19 +271,36 @@ def playlist_relative_path(playlist):
     return Path(directory) / f"{_safe_filename(playlist.name)}.m3u"
 
 
-def render_m3u(playlist):
+def _m3u_track_path(playlist, track, output_root):
+    if not output_root or not output_root.music_relative_path:
+        return track.full_path
+    playlist_directory_depth = len(playlist_relative_path(playlist).parent.parts)
+    track_path = track.relative_path.replace("\\", "/").lstrip("/")
+    return posixpath.normpath(
+        posixpath.join(
+            *([".."] * playlist_directory_depth),
+            output_root.music_relative_path,
+            track_path,
+        )
+    )
+
+
+def render_m3u(playlist, output_root=None):
+    if output_root is None:
+        output_root = PlaylistOutputRoot.load()
     lines = ["#EXTM3U"]
     for entry in playlist.entries.select_related("track", "track__artist"):
         track = entry.track
         display = f"{track.artist.name} - {track.title}".replace("\r", " ").replace("\n", " ")
         lines.append(f"#EXTINF:{int(track.duration_seconds or 0)},{display}")
-        lines.append(track.full_path)
+        lines.append(_m3u_track_path(playlist, track, output_root))
     return "\n".join(lines) + "\n"
 
 
 def render_m3u_zip(playlists):
     archive = BytesIO()
     used_names = set()
+    output_root = PlaylistOutputRoot.load()
     with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
         for playlist in playlists:
             base_name = _safe_filename(playlist.name)
@@ -291,7 +309,7 @@ def render_m3u_zip(playlists):
                 directory = PLAYLIST_DIRECTORIES[playlist.playlist_type]
                 filename = f"{directory}/{base_name}-{playlist.pk}.m3u"
             used_names.add(filename.casefold())
-            zip_file.writestr(filename, render_m3u(playlist))
+            zip_file.writestr(filename, render_m3u(playlist, output_root))
     return archive.getvalue()
 
 
@@ -304,8 +322,14 @@ def materialize_playlist(playlist):
     destination = Path(output_root.path) / playlist_relative_path(playlist)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".m3u.tmp")
-    temporary.write_text(render_m3u(playlist), encoding="utf-8")
+    temporary.write_text(render_m3u(playlist, output_root), encoding="utf-8")
     temporary.replace(destination)
+    previous = Path(playlist.output_path) if playlist.output_path else None
+    if previous and previous != destination:
+        try:
+            previous.unlink(missing_ok=True)
+        except OSError:
+            pass
     playlist.output_path = str(destination)
     playlist.save(update_fields=["output_path", "updated_at"])
     return [str(destination)]

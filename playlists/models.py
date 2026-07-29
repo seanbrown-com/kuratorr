@@ -63,6 +63,15 @@ class PlaylistTrack(TimestampedModel):
 
 class PlaylistOutputRoot(TimestampedModel):
     path = models.CharField(max_length=2048, unique=True)
+    music_relative_path = models.CharField(
+        "M3U music path relative to output directory",
+        max_length=2048,
+        blank=True,
+        help_text=(
+            "Relative path from the output directory to the music library as seen by the "
+            "device reading the M3U files. For example: ../.."
+        ),
+    )
     enabled = models.BooleanField(default=True)
 
     def save(self, *args, **kwargs):

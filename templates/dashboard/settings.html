@@ -17,7 +17,7 @@
 </section>
 <section class="card narrow" id="playlist-output-directory">
   <h2>Playlist output directory</h2>
-  <p>Kuratorr supports one server-side output directory. Written playlists are organized beneath it by playlist type. Disable it to keep playlists only in the database and browser downloads.</p>
+  <p>Kuratorr supports one server-side output directory. Written playlists are organized beneath it by playlist type. The optional M3U music path is relative to this output directory; Kuratorr accounts for each playlist's type subdirectory automatically. Leave it blank to write the server's absolute music paths. Disable output to keep playlists only in the database and browser downloads.</p>
   <form method="post">{% csrf_token %}{{ output_form.as_p }}<button name="action" value="save_playlist_output">Save output directory</button></form>
   {% if playlist_output_root %}<p>Current directory: <code>{{ playlist_output_root.path }}</code></p>{% endif %}
 </section>
