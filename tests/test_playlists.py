@@ -9,6 +9,7 @@ from enrichment.models import Decision, NoteworthyEvidence
 from library.models import ServiceSettings
 from playlists.models import Playlist, PlaylistOutputRoot
 from playlists.services import (
+    _safe_filename,
     delete_playlist,
     generate_artist_playlists,
     generate_grouped_playlists,
@@ -115,7 +116,7 @@ def test_exports_include_ordered_track_metadata_and_safe_path(evidence, track):
     playlist = Playlist.objects.get()
     m3u = render_m3u(playlist)
     script = render_copy_script(playlist)
-    assert m3u.startswith("#EXTM3U")
+    assert m3u.startswith("#EXTM3U\n#PLAYLIST:Best of Deftones\n")
     assert "Deftones - Change" in m3u
     assert track.full_path in m3u
     assert "set -euo pipefail" in script
@@ -126,6 +127,10 @@ def test_exports_include_ordered_track_metadata_and_safe_path(evidence, track):
     assert track.full_path not in script
     assert track.relative_path in script
     assert "001 - Change.mp3" in script
+
+
+def test_playlist_filenames_replace_all_whitespace_with_underscores():
+    assert _safe_filename("Best of\tDeftones\nRadio") == "Best_of_Deftones_Radio"
 
 
 @pytest.mark.django_db

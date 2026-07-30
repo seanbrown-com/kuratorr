@@ -94,6 +94,8 @@ External clients use a Redis-backed provider circuit breaker. A 429 response pre
 - Album genre assignments—not artist-wide genres—drive genre playlists.
 - Radio alternates the seed artist's accepted hits with accepted related local artists' hits.
 - M3U materialization writes a temporary file and atomically replaces the destination.
+- Extended M3U output includes a human-readable `#PLAYLIST:` title while
+  filenames and playlist-type directories replace whitespace with underscores.
 - Kuratorr supports one enabled output root. Materialized M3Us and browser ZIP entries are grouped beneath `best_of_artist`, `best_of_genres`, `best_of_year`, `best_of_decades`, `genres_by_year`, `genres_by_decade`, and `artist_radio` directories.
 - An optional M3U music path maps the output root to the music root as seen by
   external players. It is stored relative to the output root; rendering adds the

@@ -26,7 +26,8 @@ PLAYLIST_DIRECTORIES = {
 
 
 def _safe_filename(name):
-    value = re.sub(r"[^A-Za-z0-9._ -]+", "", name).strip().replace(" ", "_")
+    value = re.sub(r"\s+", "_", name.strip())
+    value = re.sub(r"[^A-Za-z0-9._-]+", "", value)
     return value[:180] or "playlist"
 
 
@@ -288,7 +289,8 @@ def _m3u_track_path(playlist, track, output_root):
 def render_m3u(playlist, output_root=None):
     if output_root is None:
         output_root = PlaylistOutputRoot.load()
-    lines = ["#EXTM3U"]
+    title = playlist.name.replace("\r", " ").replace("\n", " ")
+    lines = ["#EXTM3U", f"#PLAYLIST:{title}"]
     for entry in playlist.entries.select_related("track", "track__artist"):
         track = entry.track
         display = f"{track.artist.name} - {track.title}".replace("\r", " ").replace("\n", " ")
