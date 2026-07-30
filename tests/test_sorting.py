@@ -110,16 +110,14 @@ def test_discover_sorts_by_rank_or_recommended_artist(client, django_user_model)
 
 @pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
-def test_missing_albums_supports_only_requested_sort_columns(
-    client, django_user_model, artist, monkeypatch
-):
+def test_missing_albums_supports_only_requested_sort_columns(client, django_user_model, artist):
     record = SourceRecord.objects.create(
         source=Source.MUSICBRAINZ,
         entity_kind="release_group",
         external_id="missing-sort-source",
         fetched_at=timezone.now(),
     )
-    MissingAlbum.objects.create(
+    zulu = MissingAlbum.objects.create(
         artist=artist,
         source=Source.MUSICBRAINZ,
         source_record=record,
@@ -129,7 +127,7 @@ def test_missing_albums_supports_only_requested_sort_columns(
         year=2001,
         release_type="Album",
     )
-    MissingAlbum.objects.create(
+    alpha = MissingAlbum.objects.create(
         artist=artist,
         source=Source.MUSICBRAINZ,
         source_record=record,
@@ -139,9 +137,28 @@ def test_missing_albums_supports_only_requested_sort_columns(
         year=1999,
         release_type="EP",
     )
-    monkeypatch.setattr(
-        "enrichment.views.missing_albums_with_notable_tracks", lambda albums: list(albums)
-    )
+    for index, album in enumerate((zulu, alpha, alpha)):
+        track_record = SourceRecord.objects.create(
+            source=Source.WIKIPEDIA,
+            entity_kind="track",
+            external_id=f"missing-sort-track-{index}",
+            fetched_at=timezone.now(),
+        )
+        external = ExternalTrack.objects.create(
+            source_record=track_record,
+            artist=artist,
+            artist_name=artist.name,
+            title=f"Single {index}",
+            album_title=album.title,
+            normalized_album_title=album.normalized_title,
+        )
+        NoteworthyEvidence.objects.create(
+            artist=artist,
+            external_track=external,
+            evidence_type=NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+            confidence=Decimal("1"),
+            decision=Decision.REJECTED,
+        )
     login_admin(client, django_user_model)
 
     response = client.get(reverse("missing-albums"), {"sort": "album"})
@@ -150,10 +167,23 @@ def test_missing_albums_supports_only_requested_sort_columns(
         "Alpha Album",
         "Zulu Album",
     ]
+    response = client.get(
+        reverse("missing-albums"),
+        {"sort": "notable_tracks", "direction": "desc"},
+    )
+    assert [
+        (item.title, item.notable_track_count) for item in response.context["page"].object_list
+    ] == [("Alpha Album", 2), ("Zulu Album", 1)]
     body = response.content
     assert all(
         value in body
-        for value in (b"sort=artist", b"sort=album", b"sort=year", b"sort=release_type")
+        for value in (
+            b"sort=artist",
+            b"sort=album",
+            b"sort=year",
+            b"sort=release_type",
+            b"sort=notable_tracks",
+        )
     )
     assert b"sort=source" not in body
 

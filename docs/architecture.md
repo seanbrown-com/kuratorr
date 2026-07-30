@@ -102,3 +102,6 @@ External clients use a Redis-backed provider circuit breaker. A 429 response pre
   required parent traversal for each playlist type directory before appending
   the track path relative to its scanned library root. Blank retains absolute
   server track paths.
+- Missing releases are filtered, counted, sorted, and paginated in SQL using an
+  indexed normalized external-album title. The notable-track count represents
+  distinct source-qualified tracks associated with that absent release.

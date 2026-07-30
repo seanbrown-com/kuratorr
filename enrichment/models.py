@@ -131,6 +131,7 @@ class ExternalTrack(TimestampedModel):
     artist_name = models.CharField(max_length=500)
     title = models.CharField(max_length=1000)
     album_title = models.CharField(max_length=700, blank=True)
+    normalized_album_title = models.CharField(max_length=700, blank=True)
     year = models.PositiveSmallIntegerField(null=True, blank=True)
     duration_seconds = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
     rank = models.PositiveIntegerField(null=True, blank=True)
@@ -140,6 +141,14 @@ class ExternalTrack(TimestampedModel):
     match_decision = models.CharField(
         max_length=20, choices=Decision.choices, default=Decision.PENDING
     )
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["artist", "normalized_album_title"],
+                name="external_artist_album_idx",
+            )
+        ]
 
 
 class NoteworthyEvidence(TimestampedModel):

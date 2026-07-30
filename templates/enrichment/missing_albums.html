@@ -16,7 +16,7 @@
 </form>
 <section class="card">
   <table>
-    <thead><tr><th><a class="sort-header{% if sort_headers.artist.active %} active{% endif %}" href="{{ sort_headers.artist.url }}">Artist{% if sort_headers.artist.active %} <span aria-hidden="true">{{ sort_headers.artist.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.album.active %} active{% endif %}" href="{{ sort_headers.album.url }}">Missing album{% if sort_headers.album.active %} <span aria-hidden="true">{{ sort_headers.album.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.year.active %} active{% endif %}" href="{{ sort_headers.year.url }}">Year{% if sort_headers.year.active %} <span aria-hidden="true">{{ sort_headers.year.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.release_type.active %} active{% endif %}" href="{{ sort_headers.release_type.url }}">Release type{% if sort_headers.release_type.active %} <span aria-hidden="true">{{ sort_headers.release_type.indicator }}</span>{% endif %}</a></th><th>Source</th></tr></thead>
+    <thead><tr><th><a class="sort-header{% if sort_headers.artist.active %} active{% endif %}" href="{{ sort_headers.artist.url }}">Artist{% if sort_headers.artist.active %} <span aria-hidden="true">{{ sort_headers.artist.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.album.active %} active{% endif %}" href="{{ sort_headers.album.url }}">Missing album{% if sort_headers.album.active %} <span aria-hidden="true">{{ sort_headers.album.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.year.active %} active{% endif %}" href="{{ sort_headers.year.url }}">Year{% if sort_headers.year.active %} <span aria-hidden="true">{{ sort_headers.year.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.release_type.active %} active{% endif %}" href="{{ sort_headers.release_type.url }}">Release type{% if sort_headers.release_type.active %} <span aria-hidden="true">{{ sort_headers.release_type.indicator }}</span>{% endif %}</a></th><th><a class="sort-header{% if sort_headers.notable_tracks.active %} active{% endif %}" href="{{ sort_headers.notable_tracks.url }}">Notable Tracks/Singles{% if sort_headers.notable_tracks.active %} <span aria-hidden="true">{{ sort_headers.notable_tracks.indicator }}</span>{% endif %}</a></th><th>Source</th></tr></thead>
     <tbody>
       {% for album in page %}
       <tr>
@@ -24,10 +24,11 @@
         <td><strong>{{ album.title }}</strong></td>
         <td>{{ album.year|default:"—" }}</td>
         <td><span class="tag">{{ album.release_type|default:"Album" }}</span></td>
+        <td>{{ album.notable_track_count }}</td>
         <td>{% if album.source_record.canonical_url %}<a href="{{ album.source_record.canonical_url }}" target="_blank" rel="noopener">{{ album.get_source_display }}</a>{% else %}{{ album.get_source_display }}{% endif %}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="5">No missing albums have been identified. Run MusicBrainz enrichment to compare each artist’s album catalog with your library.</td></tr>
+      <tr><td colspan="6">No missing albums have been identified. Run MusicBrainz enrichment to compare each artist’s album catalog with your library.</td></tr>
       {% endfor %}
     </tbody>
   </table>

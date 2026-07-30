@@ -7,7 +7,8 @@ from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Count, IntegerField, Max, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rapidfuzz import fuzz, process
 
@@ -211,6 +212,7 @@ def _external_track(source, record, artist, title, evidence_type, **data):
             "artist_name": data.get("artist_name", artist.name),
             "title": title,
             "album_title": data.get("album_title", ""),
+            "normalized_album_title": normalize_text(data.get("album_title", "")),
             "year": data.get("year"),
             "duration_seconds": data.get("duration_seconds"),
             "rank": data.get("rank"),
@@ -286,51 +288,42 @@ def _store_related_artist_evidence(
 
 
 def missing_albums_with_notable_tracks(albums):
-    """Return missing releases that contain at least one source-qualified notable track."""
-    albums = list(albums)
-    if not albums:
-        return []
+    """Annotate and retain missing releases with source-qualified notable tracks."""
     settings = ServiceSettings.load()
-    artist_ids = {album.artist_id for album in albums}
-    evidence_items = NoteworthyEvidence.objects.filter(
-        artist_id__in=artist_ids,
-        external_track__isnull=False,
-    ).select_related("external_track")
-    candidates = defaultdict(list)
-    for evidence in evidence_items:
-        external = evidence.external_track
-        if not external.album_title:
-            continue
-        qualifies = evidence.evidence_type in {
-            NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
-            NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
-            NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL,
-        }
-        if evidence.evidence_type == NoteworthyEvidence.EvidenceType.SPOTIFY_TOP:
-            qualifies = bool(
-                external.rank and external.rank <= settings.spotify_noteworthy_max_rank
+    always_qualified = [
+        NoteworthyEvidence.EvidenceType.WIKIPEDIA_SINGLE,
+        NoteworthyEvidence.EvidenceType.WIKIPEDIA_VIDEO,
+        NoteworthyEvidence.EvidenceType.YOUTUBE_OFFICIAL,
+    ]
+    candidates = (
+        ExternalTrack.objects.filter(
+            artist_id=OuterRef("artist_id"),
+            normalized_album_title=OuterRef("normalized_title"),
+        )
+        .filter(
+            Q(evidence__evidence_type__in=always_qualified)
+            | Q(
+                evidence__evidence_type=NoteworthyEvidence.EvidenceType.SPOTIFY_TOP,
+                rank__gt=0,
+                rank__lte=settings.spotify_noteworthy_max_rank,
             )
-        elif evidence.evidence_type == NoteworthyEvidence.EvidenceType.LASTFM_TOP:
-            qualifies = bool(
-                external.rank
-                and external.rank <= settings.lastfm_noteworthy_max_rank
-                and external.playcount
-                and external.playcount >= settings.lastfm_min_playcount
+            | Q(
+                evidence__evidence_type=NoteworthyEvidence.EvidenceType.LASTFM_TOP,
+                rank__gt=0,
+                rank__lte=settings.lastfm_noteworthy_max_rank,
+                playcount__gte=settings.lastfm_min_playcount,
             )
-        if qualifies:
-            candidates[evidence.artist_id].append(external)
-
-    visible = []
-    for album in albums:
-        matches = {
-            external.pk
-            for external in candidates.get(album.artist_id, [])
-            if _title_score(album.title, external.album_title) >= Decimal("0.82")
-        }
-        if matches:
-            album.notable_track_count = len(matches)
-            visible.append(album)
-    return visible
+        )
+        .values("artist_id", "normalized_album_title")
+        .annotate(track_count=Count("pk", distinct=True))
+        .values("track_count")
+    )
+    return albums.annotate(
+        notable_track_count=Coalesce(
+            Subquery(candidates, output_field=IntegerField()),
+            Value(0),
+        )
+    ).filter(notable_track_count__gt=0)
 
 
 @transaction.atomic

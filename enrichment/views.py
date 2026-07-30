@@ -53,6 +53,7 @@ def missing_albums(request):
         albums = albums.filter(release_type=release_type)
     else:
         release_type = ""
+    albums = missing_albums_with_notable_tracks(albums)
     albums, sorting = apply_sorting(
         request,
         albums,
@@ -61,12 +62,11 @@ def missing_albums(request):
             "album": Lower("title"),
             "year": "year",
             "release_type": Lower("release_type"),
+            "notable_tracks": "notable_track_count",
         },
         "artist",
     )
-    page = Paginator(missing_albums_with_notable_tracks(albums), 100).get_page(
-        request.GET.get("page")
-    )
+    page = Paginator(albums, 100).get_page(request.GET.get("page"))
     return render(
         request,
         "enrichment/missing_albums.html",

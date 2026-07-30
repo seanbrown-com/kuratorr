@@ -4,6 +4,7 @@ from zipfile import ZipFile
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db.models import QuerySet
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -592,6 +593,7 @@ def test_missing_albums_page_lists_release_and_navigation(client, django_user_mo
         artist_name=artist.name,
         title="Hole in the Earth",
         album_title="Saturday Night Wrist",
+        normalized_album_title="saturday night wrist",
         rank=1,
         match_decision=Decision.REJECTED,
     )
@@ -610,8 +612,17 @@ def test_missing_albums_page_lists_release_and_navigation(client, django_user_mo
     assert response.status_code == 200
     assert all(
         value in body
-        for value in ("Missing", "Deftones", "Saturday Night Wrist", "2006", "Release type")
+        for value in (
+            "Missing",
+            "Deftones",
+            "Saturday Night Wrist",
+            "2006",
+            "Release type",
+            "Notable Tracks/Singles",
+        )
     )
+    assert response.context["page"].object_list[0].notable_track_count == 1
+    assert isinstance(response.context["page"].paginator.object_list, QuerySet)
     assert "No Notable Songs Here" not in body
 
 
